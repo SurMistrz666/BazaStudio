@@ -1,0 +1,131 @@
+name: Baza Studio native Rust builds
+# Started by hand: pick the platforms, whether the checks run first, and the
+# release the packages are attached to. Nothing builds on a push.
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Packages to build
+        type: choice
+        options: [windows, macos, all]
+        default: windows
+      checks:
+        description: Run formatting, tests and static diagnostics before the build
+        type: boolean
+        default: true
+      release:
+        description: Tag of the release to attach the packages to (empty keeps them as artifacts only)
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: native-desktop-${{ github.ref }}-${{ inputs.platforms }}
+  cancel-in-progress: true
+jobs:
+  plan:
+    name: Choose platforms
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        shell: bash
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          windows='{"runner":"windows-2025","platform":"windows-x64","target":"x86_64-pc-windows-msvc","rustflags":"-C target-feature=+crt-static"}'
+          arm='{"runner":"macos-15","platform":"macos-arm64","target":"aarch64-apple-darwin","rustflags":""}'
+          intel='{"runner":"macos-15-intel","platform":"macos-x86_64","target":"x86_64-apple-darwin","rustflags":""}'
+          case "$PLATFORMS" in
+            windows) list="$windows" ;;
+            macos) list="$arm,$intel" ;;
+            *) list="$windows,$arm,$intel" ;;
+          esac
+          echo "matrix={\"include\":[$list]}" >> "$GITHUB_OUTPUT"
+  native:
+    name: Native ${{ matrix.platform }}
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      # Attaching the packages to a release writes to the repository.
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/native/target
+      CARGO_INCREMENTAL: '0'
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {persist-credentials: false}
+      - name: Install fixed official Rust toolchain
+        shell: bash
+        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+      - name: Source formatting
+        if: inputs.checks
+        run: cargo +1.99.0 fmt --all --check
+      - name: Actual OS vault, SQL, SSH and lock tests
+        if: inputs.checks
+        run: cargo +1.99.0 test --locked --workspace
+      - name: Static diagnostics
+        if: inputs.checks
+        run: cargo +1.99.0 clippy --locked --workspace --all-targets
+      # The workspace builds BazaStudio, the one packaged program, and BazaQa, the
+      # acceptance tools that are built and tested here but never packaged.
+      - name: Build release binaries
+        run: cargo +1.99.0 build --locked --release --workspace
+      - name: Windows packaged executable and GPU acceptance
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -Destination '${{ github.workspace }}/artifacts/${{ matrix.platform }}'
+      - name: macOS packaged application and GPU acceptance
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/package-macos.sh '${{ github.workspace }}/artifacts/${{ matrix.platform }}'
+      - name: Accepted Baza Studio packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: success()
+        with:
+          name: Baza-Native-${{ matrix.platform }}
+          path: |
+            artifacts/${{ matrix.platform }}/*.exe
+            artifacts/${{ matrix.platform }}/*.dmg
+            artifacts/${{ matrix.platform }}/*.app.zip
+            artifacts/${{ matrix.platform }}/*-portable.zip
+            artifacts/${{ matrix.platform }}/*.json
+            artifacts/${{ matrix.platform }}/*.png
+            artifacts/${{ matrix.platform }}/*.sha256
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+      - name: Attach the packages to the release
+        if: success() && inputs.release != ''
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          shopt -s nullglob
+          files=(artifacts/"$PLATFORM"/*.exe artifacts/"$PLATFORM"/*.dmg artifacts/"$PLATFORM"/*.app.zip artifacts/"$PLATFORM"/*-portable.zip)
+          [ "${#files[@]}" -gt 0 ] || { echo 'No package to attach.' >&2; exit 1; }
+          gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Acceptance diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: Baza-Native-diagnostics-${{ matrix.platform }}
+          path: |
+            artifacts/${{ matrix.platform }}/*.json
+            artifacts/${{ matrix.platform }}/*.png
+          if-no-files-found: ignore
+          retention-days: 14
