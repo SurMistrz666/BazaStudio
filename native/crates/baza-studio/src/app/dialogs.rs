@@ -297,7 +297,7 @@ impl StudioApp {
                         .collect::<Vec<_>>();
                     // Each row by its whole key; a row whose key is not in
                     // the result cannot be singled out and is left alone.
-                    let changes = rows
+                    let (changes, inverses): (Vec<_>, Vec<_>) = rows
                         .iter()
                         .filter_map(|&row| {
                             let values = result.rows.get(row)?;
@@ -308,18 +308,29 @@ impl StudioApp {
                                     Some((c.name.clone(), values[i].clone()))
                                 })
                                 .collect::<Option<Vec<_>>>()?;
-                            (!key.is_empty()).then(|| RowChange::DeleteRow {
+                            let change = (!key.is_empty()).then(|| RowChange::DeleteRow {
                                 table: table.clone(),
                                 key,
-                            })
+                            })?;
+                            // The whole row, to put it back with Mod+Z.
+                            let whole: Vec<(String, Cell)> = result
+                                .columns
+                                .iter()
+                                .map(|c| c.name.clone())
+                                .zip(values.iter().cloned())
+                                .collect();
+                            let inverse = super::inverse_change(&change, Some(&whole), &[]);
+                            Some((change, inverse))
                         })
-                        .collect::<Vec<_>>();
-                    let outcome = match changes.len() {
-                        0 => Err(anyhow::anyhow!("primary_key_required")),
-                        1 => self.mutate(id, db, changes.into_iter().next().unwrap()),
-                        _ => self.mutate_many(id, db, changes),
+                        .unzip();
+                    let outcome = if changes.is_empty() {
+                        Err(anyhow::anyhow!("primary_key_required"))
+                    } else {
+                        self.remember_changes(id, &changes, inverses, super::ChangeKind::Do);
+                        self.mutate_many(id, db, changes)
                     };
                     if let Err(e) = outcome {
+                        self.pending_changes.remove(&id);
                         self.notify(e.to_string(), true);
                     }
                 }
@@ -439,21 +450,29 @@ impl StudioApp {
             },
         );
         if save && let Some(db) = db {
+            let tab_id = e.tab;
             match old.from_edited(&e.value, e.null).and_then(|new| {
-                self.mutate(
-                    e.tab,
-                    db,
-                    RowChange::UpdateCell {
-                        table: table.clone(),
-                        column: column.clone(),
-                        old: old.clone(),
-                        new,
-                        key: pk.clone(),
-                    },
-                )
+                let change = RowChange::UpdateCell {
+                    table: table.clone(),
+                    column: column.clone(),
+                    old: old.clone(),
+                    new,
+                    key: pk.clone(),
+                };
+                let inverse = super::inverse_change(&change, None, &[]);
+                self.remember_changes(
+                    tab_id,
+                    std::slice::from_ref(&change),
+                    vec![inverse],
+                    super::ChangeKind::Do,
+                );
+                self.mutate(tab_id, db, change)
             }) {
                 Ok(()) => return,
-                Err(err) => self.notify(err.to_string(), true),
+                Err(err) => {
+                    self.pending_changes.remove(&tab_id);
+                    self.notify(err.to_string(), true);
+                }
             }
         }
         if !cancel && !dialog.close {
@@ -553,7 +572,7 @@ impl StudioApp {
             },
         );
         if save {
-            let result = (|| -> anyhow::Result<()> {
+            let result = (|| -> anyhow::Result<(RowChange, Vec<String>)> {
                 let values = state
                     .values
                     .iter()
@@ -572,15 +591,30 @@ impl StudioApp {
                         Ok((name.clone(), cell))
                     })
                     .collect::<anyhow::Result<Vec<_>>>()?;
-                self.mutate(
-                    state.tab,
-                    db,
-                    RowChange::InsertRow {
-                        table: table.clone(),
-                        values,
-                    },
-                )
+                let change = RowChange::InsertRow {
+                    table: table.clone(),
+                    values,
+                };
+                let keys: Vec<String> = tab
+                    .columns
+                    .iter()
+                    .filter(|c| c.primary_key)
+                    .map(|c| c.name.clone())
+                    .collect();
+                Ok((change, keys))
             })();
+            let result = result.and_then(|(change, keys)| {
+                let inverse = super::inverse_change(&change, None, &keys);
+                self.remember_changes(
+                    state.tab,
+                    std::slice::from_ref(&change),
+                    vec![inverse],
+                    super::ChangeKind::Do,
+                );
+                self.mutate(state.tab, db, change).inspect_err(|_| {
+                    self.pending_changes.remove(&state.tab);
+                })
+            });
             match result {
                 Ok(()) => return,
                 Err(e) => self.notify(e.to_string(), true),

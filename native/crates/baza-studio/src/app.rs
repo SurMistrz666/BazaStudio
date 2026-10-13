@@ -358,7 +358,7 @@ enum Message {
     /// The query history was removed from the vault: the number of records.
     HistoryCleared(Result<usize, String>),
     /// Several rows of the tab with this id were changed in one go.
-    Mutations(Uuid, Result<usize, String>),
+    Mutations(Uuid, usize, Option<String>),
     /// Tables and views of this connection were dropped (how many), or the
     /// first refusal.
     Dropped(Uuid, Result<usize, String>),
@@ -380,7 +380,82 @@ struct NewRowEditor {
     tab: Uuid,
     values: Vec<(String, String, bool, bool)>,
 }
+/// Why changes of data were made, for the undo history.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChangeKind {
+    Do,
+    Undo,
+    Redo,
+}
+/// Changes sent to the database, with how to take each one back.
+struct PendingChanges {
+    changes: Vec<RowChange>,
+    inverses: Vec<Option<RowChange>>,
+    kind: ChangeKind,
+}
+
+/// The change that takes `change` back. A removed row comes back from its
+/// values; an added row is removed by its key; a cell gets its old value,
+/// found by the key it now has.
+fn inverse_change(
+    change: &RowChange,
+    row: Option<&[(String, Cell)]>,
+    keys: &[String],
+) -> Option<RowChange> {
+    match change {
+        RowChange::UpdateCell {
+            table,
+            column,
+            old,
+            new,
+            key,
+        } => Some(RowChange::UpdateCell {
+            table: table.clone(),
+            column: column.clone(),
+            old: new.clone(),
+            new: old.clone(),
+            key: key
+                .iter()
+                .map(|(name, value)| {
+                    if name == column {
+                        (name.clone(), new.clone())
+                    } else {
+                        (name.clone(), value.clone())
+                    }
+                })
+                .collect(),
+        }),
+        RowChange::DeleteRow { table, .. } => {
+            let values = row?;
+            values
+                .iter()
+                .all(|(_, cell)| cell.editable())
+                .then(|| RowChange::InsertRow {
+                    table: table.clone(),
+                    values: values.to_vec(),
+                })
+        }
+        RowChange::InsertRow { table, values } => {
+            let key = keys
+                .iter()
+                .map(|name| {
+                    values
+                        .iter()
+                        .find(|(n, cell)| n == name && !matches!(cell, Cell::Null))
+                        .cloned()
+                })
+                .collect::<Option<Vec<_>>>()?;
+            (!key.is_empty()).then(|| RowChange::DeleteRow {
+                table: table.clone(),
+                key,
+            })
+        }
+    }
+}
+
 struct CellEditor {
+    /// The value goes to every marked cell, not only this one.
+    all_marked: bool,
     inline: bool,
     fresh: bool,
     tab: Uuid,
@@ -457,6 +532,13 @@ pub struct StudioApp {
     structure: Option<objects_view::StructureUi>,
     /// The list of keyboard shortcuts (F1) is open.
     show_shortcuts: bool,
+    /// "Set a value" for the marked cells: the tab, the value, NULL.
+    fill_cells: Option<(Uuid, String, bool)>,
+    /// Changes of data that can be taken back, and taken back ones that can
+    /// be made again: for each tab, pairs of (what to run, what undoes it).
+    undo: Vec<(Uuid, Vec<(RowChange, RowChange)>)>,
+    redo: Vec<(Uuid, Vec<(RowChange, RowChange)>)>,
+    pending_changes: HashMap<Uuid, PendingChanges>,
     /// Open tabs of the table designer, and the one on screen.
     designs: Vec<design_view::DesignTab>,
     design_active: usize,
@@ -608,6 +690,10 @@ impl StudioApp {
             drop_confirm: None,
             structure: None,
             show_shortcuts: false,
+            fill_cells: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            pending_changes: HashMap::new(),
             designs: Vec::new(),
             design_active: 0,
             design_confirm: None,
@@ -1883,21 +1969,26 @@ impl StudioApp {
                     Ok(s) => self.notify(s, false),
                     Err(e) => self.notify(e, true),
                 },
-                Message::Mutation(id, r) => match r {
-                    Ok(()) => self.reload_tab(id),
-                    Err(e) => self.notify(e, true),
-                },
-                Message::Mutations(id, r) => {
+                Message::Mutation(id, r) => {
+                    self.settle_changes(id, usize::from(r.is_ok()));
                     match r {
-                        Ok(count) => {
+                        Ok(()) => self.reload_tab(id),
+                        Err(e) => self.notify(e, true),
+                    }
+                }
+                Message::Mutations(id, done, error) => {
+                    self.settle_changes(id, done);
+                    match error {
+                        Some(e) => self.notify(e, true),
+                        None if done > 1 => {
                             let text = if self.en() {
-                                format!("Changed records: {count}.")
+                                format!("Changed records: {done}.")
                             } else {
-                                format!("Zmienione rekordy: {count}.")
+                                format!("Zmienione rekordy: {done}.")
                             };
                             self.notify(text, false);
                         }
-                        Err(e) => self.notify(e, true),
+                        None => {}
                     }
                     // Even after a refusal some changes may have been written.
                     self.reload_tab(id);
@@ -2647,9 +2738,7 @@ impl StudioApp {
                     }
                 }
             }
-            let _ = tx
-                .send(Message::Mutations(id, outcome.map(|()| done)))
-                .await;
+            let _ = tx.send(Message::Mutations(id, done, outcome.err())).await;
             ctx.request_repaint();
         });
         Ok(())
@@ -2670,6 +2759,98 @@ impl StudioApp {
             ctx.request_repaint();
         });
         Ok(())
+    }
+
+    /// Remember how to take back the changes about to be made for a tab,
+    /// until the database says how many were made.
+    fn remember_changes(
+        &mut self,
+        id: Uuid,
+        changes: &[RowChange],
+        inverses: Vec<Option<RowChange>>,
+        kind: ChangeKind,
+    ) {
+        self.pending_changes.insert(
+            id,
+            PendingChanges {
+                changes: changes.to_vec(),
+                inverses,
+                kind,
+            },
+        );
+    }
+
+    /// The first `done` changes of a tab were made: they can be taken back
+    /// (Mod+Z) or, once taken back, made again (Mod+Shift+Z).
+    fn settle_changes(&mut self, id: Uuid, done: usize) {
+        let Some(pending) = self.pending_changes.remove(&id) else {
+            return;
+        };
+        // Taking back runs the inverses newest first.
+        let pairs: Vec<(RowChange, RowChange)> = (0..done.min(pending.changes.len()))
+            .rev()
+            .filter_map(|k| {
+                pending.inverses[k]
+                    .clone()
+                    .map(|inverse| (inverse, pending.changes[k].clone()))
+            })
+            .collect();
+        if pairs.is_empty() {
+            return;
+        }
+        let stack = match pending.kind {
+            ChangeKind::Do => {
+                self.redo.retain(|(tab, _)| *tab != id);
+                &mut self.undo
+            }
+            ChangeKind::Redo => &mut self.undo,
+            ChangeKind::Undo => &mut self.redo,
+        };
+        stack.push((id, pairs));
+        if stack.len() > 200 {
+            stack.remove(0);
+        }
+    }
+
+    /// Mod+Z and Mod+Shift+Z in a grid: take back the last change of the
+    /// tab's table, or make again the last one taken back.
+    fn undo_changes(&mut self, index: usize, again: bool) {
+        let id = self.tabs[index].id;
+        let stack = if again {
+            &mut self.redo
+        } else {
+            &mut self.undo
+        };
+        let Some(position) = stack.iter().rposition(|(tab, _)| *tab == id) else {
+            let text = if again {
+                self.tr("Nie ma czego ponowić.", "There is nothing to redo.")
+            } else {
+                self.tr("Nie ma czego cofnąć.", "There is nothing to undo.")
+            };
+            self.notify(text.into(), false);
+            return;
+        };
+        let (_, pairs) = stack.remove(position);
+        let Some(db) = self.tabs[index]
+            .connection
+            .and_then(|c| self.databases.get(&c))
+            .cloned()
+        else {
+            self.notify("connection_unavailable".into(), true);
+            return;
+        };
+        let changes: Vec<RowChange> = pairs.iter().map(|(apply, _)| apply.clone()).collect();
+        let inverses = pairs.into_iter().map(|(_, back)| Some(back)).collect();
+        let kind = if again {
+            ChangeKind::Redo
+        } else {
+            ChangeKind::Undo
+        };
+        self.remember_changes(id, &changes, inverses, kind);
+        if let Err(error) = self.mutate_many(id, db, changes) {
+            self.pending_changes.remove(&id);
+            self.notify(error.to_string(), true);
+        }
     }
 
     /// The connection of the tab with this id, for the history.
@@ -3482,8 +3663,8 @@ impl Drop for CellEditor {
     }
 }
 impl StudioApp {
-    fn commit_cell(&self, editor: CellEditor) -> Result<(), String> {
-        let result = (|| -> anyhow::Result<()> {
+    fn commit_cell(&mut self, editor: CellEditor) -> Result<(), String> {
+        let prepared = (|| -> anyhow::Result<(Database, RowChange)> {
             let tab = self
                 .tabs
                 .iter()
@@ -3527,19 +3708,40 @@ impl StudioApp {
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
             let new = old.from_edited(&editor.value, editor.null)?;
-            self.mutate(
-                editor.tab,
-                db,
-                RowChange::UpdateCell {
-                    table: table.clone(),
-                    column: column.name.clone(),
-                    old: old.clone(),
-                    new,
-                    key: pk,
-                },
-            )
+            let change = RowChange::UpdateCell {
+                table: table.clone(),
+                column: column.name.clone(),
+                old: old.clone(),
+                new,
+                key: pk,
+            };
+            Ok((db, change))
         })();
-        result.map_err(|e| e.to_string())
+        let (db, change) = prepared.map_err(|e| e.to_string())?;
+        // A value typed while several cells were marked goes into all of them.
+        if editor.all_marked
+            && let Some(index) = self.tabs.iter().position(|t| t.id == editor.tab)
+        {
+            let value = (!editor.null).then(|| editor.value.clone());
+            let edits = self
+                .marked_cells(index)
+                .into_iter()
+                .map(|(r, c)| (r, c, value.clone()))
+                .collect();
+            self.edit_cells(index, edits);
+            return Ok(());
+        }
+        let inverse = inverse_change(&change, None, &[]);
+        self.remember_changes(
+            editor.tab,
+            std::slice::from_ref(&change),
+            vec![inverse],
+            ChangeKind::Do,
+        );
+        self.mutate(editor.tab, db, change).map_err(|e| {
+            self.pending_changes.remove(&editor.tab);
+            e.to_string()
+        })
     }
 }
 

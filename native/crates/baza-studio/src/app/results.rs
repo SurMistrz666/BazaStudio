@@ -275,7 +275,11 @@ impl StudioApp {
         let mut focus_grid = false;
         let mut scroll_row = tab.scroll_to.take();
         let mut scroll_cell = None;
-        let (mut insert_key, mut delete_key) = (false, false);
+        let (mut insert_key, mut delete_key, mut clear_key) = (false, false, false);
+        let mut paste: Option<String> = None;
+        let mut set_value = false;
+        let mut set_null = false;
+        let (mut undo_key, mut redo_key) = (false, false);
         let last = (
             result.rows.len().saturating_sub(1),
             result.columns.len().saturating_sub(1),
@@ -292,6 +296,7 @@ impl StudioApp {
             scroll_row = Some(row);
             focus_grid = true;
         }
+        let (total_rows_now, total_columns_now) = (result.rows.len(), result.columns.len());
         if keyboard && !result.rows.is_empty() {
             let at = tab
                 .selected_cell
@@ -386,6 +391,45 @@ impl StudioApp {
             insert_key = take(ui, egui::Modifiers::NONE, egui::Key::Insert);
             delete_key =
                 take_mod(ui, false, egui::Key::Delete) || take_mod(ui, false, egui::Key::Backspace);
+            // Delete or Backspace alone empties the marked cells, as in a
+            // spreadsheet.
+            clear_key = take(ui, egui::Modifiers::NONE, egui::Key::Delete)
+                || take(ui, egui::Modifiers::NONE, egui::Key::Backspace);
+            // Mod+Z takes the last change back, Mod+Shift+Z (or Ctrl+Y)
+            // makes it again.
+            redo_key =
+                take_mod(ui, true, egui::Key::Z) || take(ui, egui::Modifiers::CTRL, egui::Key::Y);
+            undo_key = take_mod(ui, false, egui::Key::Z);
+            // Typing starts editing the current cell; with several cells
+            // marked, Enter writes the value into all of them.
+            if can_edit
+                && let Some(typed) = ui.input_mut(|i| {
+                    let found = i.events.iter().position(|e| {
+                        matches!(e, egui::Event::Text(t) if !t.is_empty() && t != " " && !t.chars().any(char::is_control))
+                    })?;
+                    match i.events.remove(found) {
+                        egui::Event::Text(t) => Some(t),
+                        _ => None,
+                    }
+                })
+            {
+                let marked = tab
+                    .range
+                    .and_then(|g| Some((g.row_span(total_rows_now)?, g.column_span(total_columns_now)?)))
+                    .is_some_and(|((r0, r1), (c0, c1))| (r1 - r0 + 1) * (c1 - c0 + 1) > 1);
+                let mut editor = start_cell_edit(tab.id, r, c, cell);
+                editor.value = typed;
+                editor.null = false;
+                editor.inline = true;
+                editor.all_marked = marked;
+                // The cursor after what was typed, not over it.
+                let id = egui::Id::new(("inline_edit", tab.id, r, c));
+                let mut state = egui::text_edit::TextEditState::default();
+                let end = editor.value.chars().count();
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(end))));
+                state.store(ui.ctx(), id);
+                clicked_edit = Some(editor);
+            }
         }
         let (shift, command, primary_down, pointer) = ui.input(|i| {
             (
@@ -738,6 +782,7 @@ impl StudioApp {
                                     && !tab.dragging
                                 {
                                     tab.dragging = true;
+                                    focus_grid = true;
                                     if !shift {
                                         tab.range = Some(GridRange::cell(r, c));
                                     }
@@ -803,6 +848,37 @@ impl StudioApp {
                                         select_all = true;
                                         ui.close();
                                     }
+                                    if editable {
+                                        ui.separator();
+                                        if ui
+                                            .add(
+                                                egui::Button::new(l("Wklej", "Paste"))
+                                                    .shortcut_text(super::shortcuts::keys_text(
+                                                        "Mod+V", en,
+                                                    )),
+                                            )
+                                            .clicked()
+                                        {
+                                            ui.ctx().send_viewport_cmd(
+                                                egui::ViewportCommand::RequestPaste,
+                                            );
+                                            ui.close();
+                                        }
+                                        if ui
+                                            .button(l(
+                                                "Ustaw wartość w zaznaczonych…",
+                                                "Set a value in the marked cells…",
+                                            ))
+                                            .clicked()
+                                        {
+                                            set_value = true;
+                                            ui.close();
+                                        }
+                                        if ui.button(l("Ustaw NULL", "Set to NULL")).clicked() {
+                                            set_null = true;
+                                            ui.close();
+                                        }
+                                    }
                                     ui.separator();
                                     if can_edit
                                         && ui.button(l("Edytuj komórkę", "Edit cell")).clicked()
@@ -838,6 +914,15 @@ impl StudioApp {
         if !typing {
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
                 select_all = true;
+            }
+            // Mod+V arrives as the text on the clipboard.
+            if editable {
+                paste = ui.input(|i| {
+                    i.events.iter().find_map(|e| match e {
+                        egui::Event::Paste(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                });
             }
             // Mod+C arrives as a copy request; with Shift held it copies
             // the column names too.
@@ -915,6 +1000,24 @@ impl StudioApp {
         if delete_key && has_table && caps.delete_rows && keyed {
             self.ask_delete(index);
         }
+        // Several cells at once, as in a spreadsheet.
+        if let Some(text) = paste {
+            self.paste_cells(index, &text);
+        }
+        if clear_key {
+            self.clear_cells(index);
+        }
+        if set_null {
+            let cells = self.marked_cells(index);
+            let edits = cells.into_iter().map(|(r, c)| (r, c, None)).collect();
+            self.edit_cells(index, edits);
+        }
+        if set_value {
+            self.fill_cells = Some((self.tabs[index].id, String::new(), false));
+        }
+        if undo_key || redo_key {
+            self.undo_changes(index, redo_key);
+        }
         sort
     }
 
@@ -939,6 +1042,240 @@ impl StudioApp {
                 .map(|(first, last)| (first..=last).collect())
                 .unwrap_or_default(),
             _ => tab.selected_row.filter(|r| *r < rows).into_iter().collect(),
+        }
+    }
+
+    /// The marked cells of a tab, row by row, or the selected cell.
+    pub(super) fn marked_cells(&self, index: usize) -> Vec<(usize, usize)> {
+        let tab = &self.tabs[index];
+        let Some(result) = &tab.result else {
+            return Vec::new();
+        };
+        let (rows, columns) = (result.rows.len(), result.columns.len());
+        match tab.range {
+            Some(range) => match (range.row_span(rows), range.column_span(columns)) {
+                (Some((r0, r1)), Some((c0, c1))) => (r0..=r1)
+                    .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
+                    .collect(),
+                _ => Vec::new(),
+            },
+            None => tab
+                .selected_cell
+                .filter(|(r, c)| *r < rows && *c < columns)
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    /// Write new values into cells of a tab's table in one go: `None` is
+    /// NULL. Cells that do not change, or that cannot be changed, are left.
+    pub(super) fn edit_cells(&mut self, index: usize, edits: Vec<(usize, usize, Option<String>)>) {
+        let outcome = (|| -> anyhow::Result<(Uuid, Database, Vec<RowChange>)> {
+            let tab = &self.tabs[index];
+            let result = tab
+                .result
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("result_changed_reload_required"))?;
+            let table = tab
+                .table
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("result_read_only"))?;
+            let db = tab
+                .connection
+                .and_then(|id| self.databases.get(&id))
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("connection_unavailable"))?;
+            anyhow::ensure!(
+                self.capabilities(tab.connection).edit_cells,
+                "result_read_only"
+            );
+            let keys: Vec<(String, usize)> = tab
+                .columns
+                .iter()
+                .filter(|c| c.primary_key)
+                .map(|c| {
+                    result
+                        .columns
+                        .iter()
+                        .position(|v| v.name == c.name)
+                        .map(|i| (c.name.clone(), i))
+                        .ok_or_else(|| anyhow::anyhow!("primary_key_required"))
+                })
+                .collect::<anyhow::Result<_>>()?;
+            anyhow::ensure!(!keys.is_empty(), "primary_key_required");
+            let mut changes = Vec::new();
+            for (r, c, value) in edits {
+                let (Some(row), Some(column)) = (result.rows.get(r), result.columns.get(c)) else {
+                    continue;
+                };
+                let old = &row[c];
+                if !old.editable() {
+                    continue;
+                }
+                let new = old.from_edited(value.as_deref().unwrap_or(""), value.is_none())?;
+                if &new == old {
+                    continue;
+                }
+                changes.push(RowChange::UpdateCell {
+                    table: table.clone(),
+                    column: column.name.clone(),
+                    old: old.clone(),
+                    new,
+                    key: keys
+                        .iter()
+                        .map(|(name, i)| (name.clone(), row[*i].clone()))
+                        .collect(),
+                });
+            }
+            Ok((tab.id, db, changes))
+        })();
+        let outcome = outcome.and_then(|(id, db, changes)| {
+            let count = changes.len();
+            if count > 0 {
+                let inverses = changes
+                    .iter()
+                    .map(|change| inverse_change(change, None, &[]))
+                    .collect();
+                self.remember_changes(id, &changes, inverses, ChangeKind::Do);
+                if let Err(error) = self.mutate_many(id, db, changes) {
+                    self.pending_changes.remove(&id);
+                    return Err(error);
+                }
+            }
+            Ok(count)
+        });
+        match outcome {
+            Ok(0) => {
+                let text = self.tr("Nic się nie zmieniło.", "Nothing changed.");
+                self.notify(text.into(), false);
+            }
+            Ok(_) => {}
+            Err(error) => self.notify(error.to_string(), true),
+        }
+    }
+
+    /// Mod+V in the grid: a block copied from a spreadsheet goes in from the
+    /// first marked cell; one value fills every marked cell.
+    pub(super) fn paste_cells(&mut self, index: usize, text: &str) {
+        let block = spreadsheet_rows(text);
+        let cells = self.marked_cells(index);
+        let Some(&(top, left)) = cells.iter().min() else {
+            return;
+        };
+        let edits = if block.len() == 1 && block[0].len() == 1 && cells.len() > 1 {
+            cells
+                .into_iter()
+                .map(|(r, c)| (r, c, Some(block[0][0].clone())))
+                .collect()
+        } else {
+            block
+                .into_iter()
+                .enumerate()
+                .flat_map(|(dr, row)| {
+                    row.into_iter()
+                        .enumerate()
+                        .map(move |(dc, value)| (top + dr, left + dc, Some(value)))
+                })
+                .collect()
+        };
+        self.edit_cells(index, edits);
+    }
+
+    /// Delete in the grid: NULL where the column allows it, else empty text.
+    pub(super) fn clear_cells(&mut self, index: usize) {
+        let tab = &self.tabs[index];
+        let Some(result) = &tab.result else {
+            return;
+        };
+        let nullable = |c: usize| {
+            result.columns.get(c).is_some_and(|column| {
+                tab.columns
+                    .iter()
+                    .find(|i| i.name == column.name)
+                    .is_none_or(|i| i.nullable)
+            })
+        };
+        let edits = self
+            .marked_cells(index)
+            .into_iter()
+            .map(|(r, c)| {
+                (
+                    r,
+                    c,
+                    if nullable(c) {
+                        None
+                    } else {
+                        Some(String::new())
+                    },
+                )
+            })
+            .collect();
+        self.edit_cells(index, edits);
+    }
+
+    /// "Ustaw wartość w zaznaczonych": one value, or NULL, for every marked cell.
+    pub(super) fn fill_window(&mut self, ctx: &egui::Context) {
+        let Some((id, mut value, mut null)) = self.fill_cells.take() else {
+            return;
+        };
+        let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
+            return;
+        };
+        let p = self.palette();
+        let en = self.en();
+        let l = |pl: &'static str, english: &'static str| if en { english } else { pl };
+        let count = self.marked_cells(index).len();
+        let (mut apply, mut cancel) = (false, false);
+        let dialog = widgets::dialog(
+            ctx,
+            &p,
+            "fill_cells",
+            l("Ustaw wartość", "Set a value"),
+            420.0,
+            l("Zamknij", "Close"),
+            |ui| {
+                widgets::dialog_body(ui, |ui| {
+                    widgets::help(
+                        ui,
+                        &p,
+                        &if en {
+                            format!("The same value goes into the {count} marked cells.")
+                        } else {
+                            format!("Ta sama wartość trafi do zaznaczonych komórek: {count}.")
+                        },
+                    );
+                    let response = ui.add_enabled(
+                        !null,
+                        widgets::field(&p, &mut value)
+                            .id(egui::Id::new("fill_cells_value"))
+                            .desired_width(ui.available_width() - 18.0),
+                    );
+                    if !response.has_focus() && !response.lost_focus() && !null {
+                        response.request_focus();
+                    }
+                    apply = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    widgets::checkbox(ui, &p, &mut null, "NULL");
+                });
+                widgets::dialog_footer(ui, &p, |ui| {
+                    widgets::right(ui, |ui| {
+                        apply |= Btn::primary(l("Ustaw", "Set"))
+                            .enabled(count > 0)
+                            .show(ui, &p)
+                            .clicked();
+                        cancel = Btn::new(l("Anuluj", "Cancel")).show(ui, &p).clicked();
+                    });
+                });
+            },
+        );
+        if apply {
+            let edits = self
+                .marked_cells(index)
+                .into_iter()
+                .map(|(r, c)| (r, c, (!null).then(|| value.clone())))
+                .collect();
+            self.edit_cells(index, edits);
+        } else if !cancel && !dialog.close {
+            self.fill_cells = Some((id, value, null));
         }
     }
 
@@ -1620,6 +1957,7 @@ pub(super) fn start_cell_edit(tab: Uuid, row: usize, column: usize, cell: &Cell)
     let json = matches!(cell, Cell::Json(_));
     let inline = !json && !value.contains('\n') && value.chars().count() <= 80;
     CellEditor {
+        all_marked: false,
         inline,
         fresh: true,
         tab,
@@ -2004,5 +2342,78 @@ mod grid_key_tests {
             Some((2, 2))
         );
         assert_eq!(grid_target(Key::Enter, false, (7, 2), last, 5), None);
+    }
+}
+
+/// Text pasted from a spreadsheet as rows of values: tabs between values,
+/// line breaks between rows, quotes around a value that holds either.
+pub(super) fn spreadsheet_rows(text: &str) -> Vec<Vec<String>> {
+    let text = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .unwrap_or(text);
+    let mut rows = vec![Vec::new()];
+    let mut value = String::new();
+    let mut chars = text.chars().peekable();
+    let mut quoted = false;
+    let mut at_start = true;
+    while let Some(ch) = chars.next() {
+        if quoted {
+            if ch == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    value.push('"');
+                } else {
+                    quoted = false;
+                }
+            } else {
+                value.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '"' if at_start => quoted = true,
+            '\t' => {
+                rows.last_mut().unwrap().push(std::mem::take(&mut value));
+                at_start = true;
+                continue;
+            }
+            '\r' if chars.peek() == Some(&'\n') => {}
+            '\n' | '\r' => {
+                rows.last_mut().unwrap().push(std::mem::take(&mut value));
+                rows.push(Vec::new());
+                at_start = true;
+                continue;
+            }
+            other => value.push(other),
+        }
+        at_start = false;
+    }
+    rows.last_mut().unwrap().push(value);
+    rows
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::spreadsheet_rows;
+
+    #[test]
+    fn spreadsheet_text_becomes_rows_and_values() {
+        assert_eq!(spreadsheet_rows("5"), vec![vec!["5".to_owned()]]);
+        assert_eq!(
+            spreadsheet_rows("a\tb\r\nc\td\r\n"),
+            vec![
+                vec!["a".to_owned(), "b".into()],
+                vec!["c".into(), "d".into()]
+            ]
+        );
+        assert_eq!(
+            spreadsheet_rows("\"two\nlines\"\t\"say \"\"hi\"\"\"\t"),
+            vec![vec![
+                "two\nlines".to_owned(),
+                "say \"hi\"".into(),
+                String::new()
+            ]]
+        );
     }
 }

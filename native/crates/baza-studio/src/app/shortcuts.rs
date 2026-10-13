@@ -149,6 +149,26 @@ pub(super) const GROUPS: &[(&str, &str, &[Shortcut])] = &[
                 "Zapisz albo porzuć zmianę komórki",
                 "Save or discard the change of the cell",
             ),
+            key(
+                "Pisanie, Enter",
+                "Nowa wartość komórki; przy kilku zaznaczonych trafia do wszystkich",
+                "A new value of the cell; with several marked it goes into all of them",
+            ),
+            key(
+                "Mod+V",
+                "Wklej blok z arkusza; jedna wartość wypełnia zaznaczenie",
+                "Paste a block from a spreadsheet; one value fills the mark",
+            ),
+            key(
+                "Delete",
+                "Wyczyść zaznaczone komórki",
+                "Empty the marked cells",
+            ),
+            key(
+                "Mod+Z, Mod+Shift+Z",
+                "Cofnij, ponów zmianę danych",
+                "Undo, redo a change of data",
+            ),
             key("Insert, Mod+N", "Dodaj rekord", "Add a record"),
             key(
                 "Mod+Delete, Mod+Backspace",

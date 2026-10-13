@@ -126,6 +126,9 @@ pub enum Step {
     Drag(egui::Pos2, egui::Pos2),
     /// What Command+C (Ctrl+C) gives the window: a copy request.
     Copy,
+    /// What Command+V gives the window: the text on the clipboard. `\t` and
+    /// `\n` in the script stand for a tab and a line break.
+    Paste(String),
     DoubleClick(egui::Pos2),
     RightClick(egui::Pos2),
     /// Move the pointer without pressing a button.
@@ -177,6 +180,7 @@ impl Step {
                 )
             }
             "t" => Self::Text(value.to_owned()),
+            "p" => Self::Paste(value.replace("\\t", "\t").replace("\\n", "\n")),
             "k" => {
                 let mut modifiers = egui::Modifiers::NONE;
                 let mut parts = value.trim().split('+').collect::<Vec<_>>();
@@ -629,6 +633,7 @@ impl StudioApp {
                 if let Some(index) = table_tab {
                     let tab = &self.tabs[index];
                     self.cell_editor = Some(CellEditor {
+                        all_marked: false,
                         inline: false,
                         fresh: true,
                         tab: tab.id,
@@ -693,6 +698,7 @@ impl StudioApp {
                     tab.selected_row = Some(2);
                     tab.selected_cell = Some((2, 3));
                     self.cell_editor = Some(CellEditor {
+                        all_marked: false,
                         inline: true,
                         fresh: true,
                         tab: tab.id,
@@ -926,6 +932,10 @@ impl StudioApp {
             }
             Step::Copy => {
                 events.push(egui::Event::Copy);
+                1
+            }
+            Step::Paste(text) => {
+                events.push(egui::Event::Paste(text.clone()));
                 1
             }
             Step::DoubleClick(pos) => {

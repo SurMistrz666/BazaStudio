@@ -104,6 +104,7 @@ impl StudioApp {
         self.confirmations(&ctx);
         self.objects_windows(&ctx);
         self.shortcut_windows(&ctx);
+        self.fill_window(&ctx);
         self.design_confirm_window(&ctx);
         self.insert_window(&ctx);
         self.lock_settings_window(&ctx);
