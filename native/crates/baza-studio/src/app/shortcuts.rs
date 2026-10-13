@@ -145,9 +145,14 @@ pub(super) const GROUPS: &[(&str, &str, &[Shortcut])] = &[
                 "Large value editor",
             ),
             key(
-                "Mod+S, Esc",
-                "Zapisz albo porzuć zmianę komórki",
-                "Save or discard the change of the cell",
+                "Mod+S",
+                "Zapisz w bazie zmiany czekające w siatce",
+                "Save the changes waiting in the grid to the database",
+            ),
+            key(
+                "Esc",
+                "Porzuć edycję komórki",
+                "Leave the cell being edited",
             ),
             key(
                 "Pisanie, Enter",

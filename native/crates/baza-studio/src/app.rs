@@ -44,6 +44,7 @@ mod shell;
 mod shortcuts;
 mod sidebar;
 mod sql_view;
+mod staged;
 mod table_view;
 mod transfer_view;
 
@@ -174,6 +175,13 @@ struct QueryTab {
     /// Records the filter of the table lets through, once counted for the
     /// last page.
     total: Option<u64>,
+    /// Values typed into the grid and not saved yet, by row and column.
+    pending: std::collections::BTreeMap<(usize, usize), Cell>,
+    /// Rows added at the end of the grid and not saved yet.
+    added: std::collections::BTreeSet<usize>,
+    /// The waiting changes in the order they were made, each with the values
+    /// it replaced, for Mod+Z.
+    pending_log: Vec<StagedStep>,
     /// A row to bring into view in the next frame.
     scroll_to: Option<usize>,
     /// A row to select once the page being loaded arrives (Mod+G).
@@ -212,6 +220,9 @@ impl QueryTab {
             dragging: false,
             form_view: false,
             total: None,
+            pending: Default::default(),
+            added: Default::default(),
+            pending_log: Vec::new(),
             scroll_to: None,
             pending_row: None,
         }
@@ -387,6 +398,16 @@ enum ChangeKind {
     Undo,
     Redo,
 }
+/// One step of waiting changes: each cell with the value it had waiting
+/// before, if any.
+type StagedStep = Vec<((usize, usize), Option<Cell>)>;
+/// The waiting changes of a grid: values by cell, new rows, their order.
+type StagedBackup = (
+    std::collections::BTreeMap<(usize, usize), Cell>,
+    std::collections::BTreeSet<usize>,
+    Vec<StagedStep>,
+);
+
 /// Changes sent to the database, with how to take each one back.
 struct PendingChanges {
     changes: Vec<RowChange>,
@@ -541,6 +562,8 @@ pub struct StudioApp {
     undo: Vec<(Uuid, Vec<(RowChange, RowChange)>)>,
     redo: Vec<(Uuid, Vec<(RowChange, RowChange)>)>,
     pending_changes: HashMap<Uuid, PendingChanges>,
+    /// Waiting changes of a tab sent to the database, kept until it answers.
+    staged_backup: HashMap<Uuid, StagedBackup>,
     /// Open tabs of the table designer, and the one on screen.
     designs: Vec<design_view::DesignTab>,
     design_active: usize,
@@ -696,6 +719,7 @@ impl StudioApp {
             undo: Vec::new(),
             redo: Vec::new(),
             pending_changes: HashMap::new(),
+            staged_backup: HashMap::new(),
             designs: Vec::new(),
             design_active: 0,
             design_confirm: None,
@@ -1764,6 +1788,9 @@ impl StudioApp {
                                 }
                                 tab.selected_row = None;
                                 tab.selected_cell = None;
+                                tab.pending.clear();
+                                tab.added.clear();
+                                tab.pending_log.clear();
                                 tab.result = Some(v);
                             }
                             Err(e) => tab.error = Some(e),
@@ -1997,6 +2024,15 @@ impl StudioApp {
                 }
                 Message::Mutations(id, done, error) => {
                     let shown = self.settle_changes(id, done);
+                    // Refused at once: nothing was written and what was typed
+                    // stays in the grid to be put right.
+                    if error.is_some() && done == 0 && self.restore_staged(id) {
+                        if let Some(e) = error {
+                            self.notify(e, true);
+                        }
+                        continue;
+                    }
+                    self.staged_backup.remove(&id);
                     match error {
                         Some(e) => self.notify(e, true),
                         None if done > 1 => {
@@ -2880,28 +2916,6 @@ impl StudioApp {
         }
     }
 
-    /// Put new values into the grid of a tab at once, before the database
-    /// answers; the changes waiting for it then need no reload.
-    fn show_now(&mut self, id: Uuid, cells: &[(usize, usize, Option<Cell>)]) {
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) else {
-            return;
-        };
-        let Some(result) = tab.result.as_mut() else {
-            return;
-        };
-        for (r, c, value) in cells {
-            if let (Some(value), Some(cell)) = (
-                value,
-                result.rows.get_mut(*r).and_then(|row| row.get_mut(*c)),
-            ) {
-                *cell = value.clone();
-            }
-        }
-        if let Some(pending) = self.pending_changes.get_mut(&id) {
-            pending.shown = true;
-        }
-    }
-
     /// The connection of the tab with this id, for the history.
     fn tab_connection(&self, id: Uuid) -> Uuid {
         self.tabs
@@ -3712,90 +3726,25 @@ impl Drop for CellEditor {
     }
 }
 impl StudioApp {
+    /// The value of the cell editor waits in the grid until it is saved;
+    /// typed for several marked cells, it goes into all of them.
     fn commit_cell(&mut self, editor: CellEditor) -> Result<(), String> {
-        let prepared = (|| -> anyhow::Result<(Database, RowChange)> {
-            let tab = self
-                .tabs
-                .iter()
-                .find(|t| t.id == editor.tab)
-                .ok_or_else(|| anyhow::anyhow!("result_changed_reload_required"))?;
-            let result = tab
-                .result
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("result_changed_reload_required"))?;
-            let row = result
-                .rows
-                .get(editor.row)
-                .ok_or_else(|| anyhow::anyhow!("result_changed_reload_required"))?;
-            let old = row
-                .get(editor.column)
-                .ok_or_else(|| anyhow::anyhow!("result_changed_reload_required"))?;
-            let table = tab
-                .table
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("result_read_only"))?;
-            let column = result
-                .columns
-                .get(editor.column)
-                .ok_or_else(|| anyhow::anyhow!("result_changed_reload_required"))?;
-            let db = tab
-                .connection
-                .and_then(|id| self.databases.get(&id))
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("connection_unavailable"))?;
-            let pk = tab
-                .columns
-                .iter()
-                .filter(|c| c.primary_key)
-                .map(|c| {
-                    let i = result
-                        .columns
-                        .iter()
-                        .position(|v| v.name == c.name)
-                        .ok_or_else(|| anyhow::anyhow!("primary_key_required"))?;
-                    Ok((c.name.clone(), row[i].clone()))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            let new = old.from_edited(&editor.value, editor.null)?;
-            let change = RowChange::UpdateCell {
-                table: table.clone(),
-                column: column.name.clone(),
-                old: old.clone(),
-                new,
-                key: pk,
-            };
-            Ok((db, change))
-        })();
-        let (db, change) = prepared.map_err(|e| e.to_string())?;
-        // A value typed while several cells were marked goes into all of them.
-        if editor.all_marked
-            && let Some(index) = self.tabs.iter().position(|t| t.id == editor.tab)
-        {
-            let value = (!editor.null).then(|| editor.value.clone());
-            let edits = self
-                .marked_cells(index)
-                .into_iter()
-                .map(|(r, c)| (r, c, value.clone()))
-                .collect();
-            self.edit_cells(index, edits);
-            return Ok(());
-        }
-        let inverse = inverse_change(&change, None, &[]);
-        self.remember_changes(
-            editor.tab,
-            std::slice::from_ref(&change),
-            vec![inverse],
-            ChangeKind::Do,
-        );
-        let new = match &change {
-            RowChange::UpdateCell { new, .. } => Some(new.clone()),
-            _ => None,
+        let index = self
+            .tabs
+            .iter()
+            .position(|t| t.id == editor.tab)
+            .ok_or_else(|| "result_changed_reload_required".to_owned())?;
+        let value = (!editor.null).then(|| editor.value.clone());
+        let cells = if editor.all_marked {
+            self.marked_cells(index)
+        } else {
+            vec![(editor.row, editor.column)]
         };
-        self.mutate(editor.tab, db, change).map_err(|e| {
-            self.pending_changes.remove(&editor.tab);
-            e.to_string()
-        })?;
-        self.show_now(editor.tab, &[(editor.row, editor.column, new)]);
+        let edits = cells
+            .into_iter()
+            .map(|(r, c)| (r, c, value.clone()))
+            .collect();
+        self.edit_cells(index, edits);
         Ok(())
     }
 }

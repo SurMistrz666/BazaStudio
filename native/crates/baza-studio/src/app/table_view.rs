@@ -120,8 +120,8 @@ impl StudioApp {
                     let keyed = tab_keyed;
                     let text = if editable && caps.edit_cells && keyed {
                         l(
-                            "Dwuklik lub F2 zmienia jedną komórkę: Enter zapisuje, Esc anuluje. Nagłówek sortuje dane.",
-                            "Double-click or F2 changes one cell: Enter saves, Esc cancels. A header sorts the data.",
+                            "Pisz w komórce albo kliknij ją dwukrotnie. Zmiany czekają w siatce: ✓ albo Ctrl+S zapisuje je w bazie, ✕ porzuca. Nagłówek sortuje dane.",
+                            "Type in a cell or double-click it. Changes wait in the grid: ✓ or Ctrl+S saves them to the database, ✕ discards them. A header sorts the data.",
                         )
                     } else if !caps.edit_cells {
                         l(
@@ -234,7 +234,10 @@ impl StudioApp {
         let typing = ui.ctx().text_edit_focused() && !filter_focused;
         let (mut add_key, mut goto_key, mut structure_key, mut query_key) =
             (false, false, false, false);
-        if !modal && self.cell_editor.is_some() && take_mod(ui, false, egui::Key::S) {
+        if !modal
+            && (self.cell_editor.is_some() || self.has_staged(index))
+            && take_mod(ui, false, egui::Key::S)
+        {
             footer.apply = true;
         }
         if !modal && !typing {
@@ -306,13 +309,9 @@ impl StudioApp {
             self.tabs[index].cancel.cancel();
         }
         if footer.apply {
-            if let Some(editor) = self.cell_editor.take()
-                && let Err(error) = self.commit_cell(editor)
-            {
-                self.notify(error, true);
-            }
+            self.apply_staged(index);
         } else if footer.discard {
-            self.cell_editor = None;
+            self.discard_staged(index);
         }
         if apply_filter {
             let tab = &mut self.tabs[index];

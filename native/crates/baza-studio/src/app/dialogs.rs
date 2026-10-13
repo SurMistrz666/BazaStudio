@@ -357,14 +357,14 @@ impl StudioApp {
         let Some(table) = tab.table.clone() else {
             return;
         };
-        let Some(old) = result
+        if result
             .rows
             .get(e.row)
             .and_then(|row| row.get(e.column))
-            .cloned()
-        else {
+            .is_none()
+        {
             return;
-        };
+        }
         let column = result.columns[e.column].name.clone();
         let pk: Vec<_> = tab
             .columns
@@ -449,29 +449,12 @@ impl StudioApp {
                 });
             },
         );
-        if save && let Some(db) = db {
-            let tab_id = e.tab;
-            match old.from_edited(&e.value, e.null).and_then(|new| {
-                let change = RowChange::UpdateCell {
-                    table: table.clone(),
-                    column: column.clone(),
-                    old: old.clone(),
-                    new,
-                    key: pk.clone(),
-                };
-                let inverse = super::inverse_change(&change, None, &[]);
-                self.remember_changes(
-                    tab_id,
-                    std::slice::from_ref(&change),
-                    vec![inverse],
-                    super::ChangeKind::Do,
-                );
-                self.mutate(tab_id, db, change)
-            }) {
+        if save {
+            match self.commit_cell(e) {
                 Ok(()) => return,
                 Err(err) => {
-                    self.pending_changes.remove(&tab_id);
-                    self.notify(err.to_string(), true);
+                    self.notify(err, true);
+                    return;
                 }
             }
         }
@@ -1066,7 +1049,7 @@ impl StudioApp {
 /// (with an optional size, unsigned or nullable wrapper) is sent as a number;
 /// anything else (intervals, arrays, maps, points, mixed types) goes as text
 /// and the driver converts it to the column's type.
-fn typed_cell(data_type: &str, value: &str) -> Cell {
+pub(super) fn typed_cell(data_type: &str, value: &str) -> Cell {
     let mut ty = data_type.trim().to_ascii_lowercase();
     for wrapper in ["nullable(", "lowcardinality("] {
         if let Some(inner) = ty.strip_prefix(wrapper).and_then(|t| t.strip_suffix(')')) {

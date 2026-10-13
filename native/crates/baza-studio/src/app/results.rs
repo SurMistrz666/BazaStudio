@@ -375,8 +375,9 @@ impl StudioApp {
             }
             let (r, c) = tab.selected_cell.unwrap_or(at);
             let (r, c) = (r.min(last.0), c.min(last.1));
-            let cell = &result.rows[r][c];
-            let can_edit = editable && cell.editable();
+            let cell = tab.pending.get(&(r, c)).unwrap_or(&result.rows[r][c]);
+            let can_edit =
+                (editable && cell.editable()) || (tab.added.contains(&r) && tab.table.is_some());
             if take(ui, egui::Modifiers::NONE, egui::Key::Enter) && can_edit {
                 clicked_edit = Some(start_cell_edit(tab.id, r, c, cell));
             }
@@ -476,6 +477,12 @@ impl StudioApp {
         let mut copy_as: Option<CopyAs> = None;
         let mut select_all = false;
         let marked_fill = theme::blend(p.bg, p.accent, 0.20);
+        // Changes waiting to be saved are tinted; their rows carry a pencil,
+        // new rows a plus.
+        let staged_fill = theme::blend(p.bg, theme::WARNING, 0.18);
+        let staged_rows: std::collections::BTreeSet<usize> =
+            tab.pending.keys().map(|(r, _)| *r).collect();
+        let mut move_next = false;
         egui::ScrollArea::horizontal()
             .id_salt(("result_scroll", tab.id))
             .auto_shrink([false, false])
@@ -616,13 +623,39 @@ impl StudioApp {
                                 ui.painter().vline(rect.right() - 0.5, rect.y_range(), line);
                                 ui.painter()
                                     .hline(rect.x_range(), rect.bottom() - 0.5, line);
-                                ui.painter().text(
-                                    egui::pos2(rect.left() + CELL_PAD, rect.center().y),
-                                    egui::Align2::LEFT_CENTER,
-                                    (first_number + r as u64 + 1).to_string(),
-                                    egui::FontId::proportional(p.small()),
-                                    p.muted,
-                                );
+                                if tab.added.contains(&r) {
+                                    widgets::paint(
+                                        ui.painter(),
+                                        egui::Rect::from_center_size(
+                                            egui::pos2(
+                                                rect.left() + CELL_PAD + 5.0,
+                                                rect.center().y,
+                                            ),
+                                            egui::vec2(12.0, 12.0),
+                                        ),
+                                        Icon::Plus,
+                                        theme::WARNING,
+                                    );
+                                } else {
+                                    ui.painter().text(
+                                        egui::pos2(rect.left() + CELL_PAD, rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        (first_number + r as u64 + 1).to_string(),
+                                        egui::FontId::proportional(p.small()),
+                                        p.muted,
+                                    );
+                                }
+                                if staged_rows.contains(&r) && !tab.added.contains(&r) {
+                                    widgets::paint(
+                                        ui.painter(),
+                                        egui::Rect::from_center_size(
+                                            egui::pos2(rect.right() - 9.0, rect.center().y),
+                                            egui::vec2(10.0, 10.0),
+                                        ),
+                                        Icon::Pencil,
+                                        theme::WARNING,
+                                    );
+                                }
                             });
                             if number.clicked() {
                                 focus_grid = true;
@@ -640,6 +673,9 @@ impl StudioApp {
                                 tab.selected_cell = None;
                             }
                             for (c, cell) in result.rows[r].iter().enumerate() {
+                                let waiting = tab.pending.contains_key(&(r, c));
+                                let cell = tab.pending.get(&(r, c)).unwrap_or(cell);
+                                let new_row = tab.added.contains(&r);
                                 let editing = self.cell_editor.as_ref().is_some_and(|e| {
                                     e.inline && e.tab == tab.id && e.row == r && e.column == c
                                 });
@@ -690,8 +726,14 @@ impl StudioApp {
                                                     i.key_pressed(egui::Key::Escape),
                                                 )
                                             });
+                                            // Tab saves the cell and moves to
+                                            // the next one, as Enter saves.
+                                            let tab_key = ui.input(|i| {
+                                                i.key_pressed(egui::Key::Tab) && !i.modifiers.shift
+                                            });
                                             inline_cancel |= escape;
-                                            inline_save |= enter && !escape;
+                                            inline_save |= (enter || tab_key) && !escape;
+                                            move_next |= tab_key && !escape;
                                         }
                                         inline_save |= widgets::icon_toggle(
                                             ui,
@@ -727,6 +769,9 @@ impl StudioApp {
                                         return;
                                     }
                                     let painter = ui.painter();
+                                    if waiting && !selected {
+                                        painter.rect_filled(rect, 0.0, staged_fill);
+                                    }
                                     if in_mark && !selected {
                                         painter.rect_filled(rect, 0.0, marked_fill);
                                     }
@@ -745,6 +790,9 @@ impl StudioApp {
                                     let null = typed.is_none() && matches!(cell, Cell::Null);
                                     let text: String = match typed {
                                         Some(value) => value.chars().take(512).collect(),
+                                        // A cell of a new row nobody typed into
+                                        // takes the database's default.
+                                        None if new_row && !waiting => String::new(),
                                         None => cell.display().chars().take(512).collect(),
                                     };
                                     let mut job = egui::text::LayoutJob::simple_singleline(
@@ -816,7 +864,8 @@ impl StudioApp {
                                     tab.selected_row = Some(r);
                                     tab.selected_cell = Some((r, c));
                                 }
-                                let can_edit = editable && cell.editable();
+                                let can_edit = (editable && cell.editable())
+                                    || (new_row && tab.table.is_some());
                                 if response.double_clicked() && can_edit {
                                     clicked_edit = Some(start_cell_edit(tab.id, r, c, cell));
                                 }
@@ -995,10 +1044,30 @@ impl StudioApp {
             self.cell_editor = Some(edit);
         }
         if inline_save {
-            if let Some(editor) = self.cell_editor.take()
-                && let Err(error) = self.commit_cell(editor)
-            {
-                self.notify(error, true);
+            if let Some(editor) = self.cell_editor.take() {
+                let (r, c) = (editor.row, editor.column);
+                if let Err(error) = self.commit_cell(editor) {
+                    self.notify(error, true);
+                }
+                // Tab: on to the next cell of the row, then the next row.
+                if move_next {
+                    let tab = &mut self.tabs[index];
+                    let (rows, columns) = tab
+                        .result
+                        .as_ref()
+                        .map_or((0, 0), |r| (r.rows.len(), r.columns.len()));
+                    if rows > 0 && columns > 0 {
+                        let next = if c + 1 < columns {
+                            (r, c + 1)
+                        } else {
+                            ((r + 1).min(rows - 1), 0)
+                        };
+                        tab.selected_cell = Some(next);
+                        tab.selected_row = Some(next.0);
+                        tab.range = Some(GridRange::cell(next.0, next.1));
+                        tab.scroll_to = Some(next.0);
+                    }
+                }
             }
         } else if inline_cancel {
             self.cell_editor = None;
@@ -1032,7 +1101,9 @@ impl StudioApp {
         if set_value {
             self.fill_cells = Some((self.tabs[index].id, String::new(), false));
         }
-        if undo_key || redo_key {
+        if undo_key && self.undo_staged(index) {
+            // A waiting change was taken back; nothing went to the database.
+        } else if undo_key || redo_key {
             self.undo_changes(index, redo_key);
         }
         sort
@@ -1081,98 +1152,6 @@ impl StudioApp {
                 .filter(|(r, c)| *r < rows && *c < columns)
                 .into_iter()
                 .collect(),
-        }
-    }
-
-    /// Write new values into cells of a tab's table in one go: `None` is
-    /// NULL. Cells that do not change, or that cannot be changed, are left.
-    pub(super) fn edit_cells(&mut self, index: usize, edits: Vec<(usize, usize, Option<String>)>) {
-        let outcome = (|| -> anyhow::Result<PreparedEdits> {
-            let tab = &self.tabs[index];
-            let result = tab
-                .result
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("result_changed_reload_required"))?;
-            let table = tab
-                .table
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("result_read_only"))?;
-            let db = tab
-                .connection
-                .and_then(|id| self.databases.get(&id))
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("connection_unavailable"))?;
-            anyhow::ensure!(
-                self.capabilities(tab.connection).edit_cells,
-                "result_read_only"
-            );
-            let keys: Vec<(String, usize)> = tab
-                .columns
-                .iter()
-                .filter(|c| c.primary_key)
-                .map(|c| {
-                    result
-                        .columns
-                        .iter()
-                        .position(|v| v.name == c.name)
-                        .map(|i| (c.name.clone(), i))
-                        .ok_or_else(|| anyhow::anyhow!("primary_key_required"))
-                })
-                .collect::<anyhow::Result<_>>()?;
-            anyhow::ensure!(!keys.is_empty(), "primary_key_required");
-            let mut changes = Vec::new();
-            let mut shown = Vec::new();
-            for (r, c, value) in edits {
-                let (Some(row), Some(column)) = (result.rows.get(r), result.columns.get(c)) else {
-                    continue;
-                };
-                let old = &row[c];
-                if !old.editable() {
-                    continue;
-                }
-                let new = old.from_edited(value.as_deref().unwrap_or(""), value.is_none())?;
-                if &new == old {
-                    continue;
-                }
-                shown.push((r, c, new.clone()));
-                changes.push(RowChange::UpdateCell {
-                    table: table.clone(),
-                    column: column.name.clone(),
-                    old: old.clone(),
-                    new,
-                    key: keys
-                        .iter()
-                        .map(|(name, i)| (name.clone(), row[*i].clone()))
-                        .collect(),
-                });
-            }
-            Ok((tab.id, db, changes, shown))
-        })();
-        let outcome = outcome.and_then(|(id, db, changes, shown)| {
-            let count = changes.len();
-            if count > 0 {
-                let inverses = changes
-                    .iter()
-                    .map(|change| inverse_change(change, None, &[]))
-                    .collect();
-                self.remember_changes(id, &changes, inverses, ChangeKind::Do);
-                if let Err(error) = self.mutate_many(id, db, changes) {
-                    self.pending_changes.remove(&id);
-                    return Err(error);
-                }
-                // The grid shows the new values at once.
-                let cells: Vec<_> = shown.into_iter().map(|(r, c, v)| (r, c, Some(v))).collect();
-                self.show_now(id, &cells);
-            }
-            Ok(count)
-        });
-        match outcome {
-            Ok(0) => {
-                let text = self.tr("Nic się nie zmieniło.", "Nothing changed.");
-                self.notify(text.into(), false);
-            }
-            Ok(_) => {}
-            Err(error) => self.notify(error.to_string(), true),
         }
     }
 
@@ -1304,6 +1283,16 @@ impl StudioApp {
     /// Ask before deleting the marked rows of a tab.
     pub(super) fn ask_delete(&mut self, index: usize) {
         let rows = self.marked_rows(index);
+        // New rows that were never saved simply go.
+        let added: Vec<usize> = rows
+            .iter()
+            .copied()
+            .filter(|r| self.tabs[index].added.contains(r))
+            .collect();
+        if !added.is_empty() {
+            self.drop_added_rows(index, &added);
+            return;
+        }
         if !rows.is_empty() {
             self.delete_confirm = Some((self.tabs[index].id, rows));
         }
@@ -1372,6 +1361,12 @@ impl StudioApp {
         let marked = !self.marked_rows(index).is_empty();
         let tab = &self.tabs[index];
         let editing = self.cell_editor.as_ref().is_some_and(|e| e.tab == tab.id);
+        let waiting = tab.pending.len()
+            + tab
+                .added
+                .iter()
+                .filter(|r| !tab.pending.keys().any(|(row, _)| row == *r))
+                .count();
         let rows = tab.result.as_ref().map_or(0, |r| r.rows.len());
         let offset = tab
             .page_request
@@ -1442,21 +1437,19 @@ impl StudioApp {
             );
             actions.apply = disabled(
                 ui,
-                editing,
+                editing || waiting > 0,
                 Icon::Check,
-                l(
-                    "Zapisz zmienianą komórkę (Enter)",
-                    "Save the cell being changed (Enter)",
+                &format!(
+                    "{} ({})",
+                    l("Zapisz zmiany w bazie", "Save the changes to the database"),
+                    super::shortcuts::keys_text("Mod+S", en)
                 ),
             );
             actions.discard = disabled(
                 ui,
-                editing,
+                editing || waiting > 0,
                 Icon::Close,
-                l(
-                    "Porzuć zmianę komórki (Esc)",
-                    "Discard the change of the cell (Esc)",
-                ),
+                l("Porzuć zmiany", "Discard the changes"),
             );
             actions.refresh = disabled(ui, !busy, Icon::Refresh, l("Odśwież dane", "Reload data"));
             actions.stop = disabled(
@@ -1598,6 +1591,18 @@ impl StudioApp {
                     actions.page = Some(0);
                 }
                 ui.add_space(10.0);
+                if waiting > 0 {
+                    let text = if en {
+                        format!("Changes to save: {waiting}")
+                    } else {
+                        format!("Zmiany do zapisania: {waiting}")
+                    };
+                    ui.add(
+                        egui::Label::new(RichText::new(text).size(p.small()).color(theme::WARNING))
+                            .selectable(false),
+                    );
+                    ui.add_space(10.0);
+                }
                 ui.add(
                     egui::Label::new(RichText::new(status).size(p.small()).color(p.muted))
                         .selectable(false),
@@ -1788,6 +1793,14 @@ impl StudioApp {
 
     /// Load the rows of the tab's table again with its filter, order and page.
     pub(super) fn browse(&mut self, index: usize) {
+        if self.has_staged(index) {
+            let text = self.tr(
+                "Najpierw zapisz zmiany (✓ albo Ctrl+S) albo je porzuć (✕).",
+                "Save the changes first (✓ or Ctrl+S) or discard them (✕).",
+            );
+            self.notify(text.into(), true);
+            return;
+        }
         let limit = self.page_limit(index);
         let tab = &mut self.tabs[index];
         let Some(table) = tab.source.clone().or_else(|| tab.table.clone()) else {
@@ -1851,6 +1864,12 @@ impl StudioApp {
     pub(super) fn begin_insert(&mut self, index: usize) {
         let tables = self.capabilities(self.tabs[index].connection).browse
             == baza_core::engine::BrowseModel::Tables;
+        // A table gets the new row in the grid; documents and keys keep the
+        // window, which asks for the key.
+        if tables && self.tabs[index].table.is_some() && self.tabs[index].result.is_some() {
+            self.add_row(index);
+            return;
+        }
         let tab = &self.tabs[index];
         self.new_row = Some(NewRowEditor {
             tab: tab.id,
@@ -1873,7 +1892,7 @@ impl StudioApp {
 /// A key the database most likely fills in itself: an integer primary key of a
 /// relational table (auto-increment, identity, rowid). The name of a key of a
 /// document or key-value store is always typed by the user.
-fn generated_key(column: &baza_core::ColumnInfo) -> bool {
+pub(super) fn generated_key(column: &baza_core::ColumnInfo) -> bool {
     let kind = column.data_type.to_ascii_lowercase();
     column.primary_key
         && (kind.contains("serial")
@@ -2366,9 +2385,6 @@ mod grid_key_tests {
         assert_eq!(grid_target(Key::Enter, false, (7, 2), last, 5), None);
     }
 }
-
-/// A tab, its database, the changes and the new values to show at once.
-type PreparedEdits = (Uuid, Database, Vec<RowChange>, Vec<(usize, usize, Cell)>);
 
 /// Text pasted from a spreadsheet as rows of values: tabs between values,
 /// line breaks between rows, quotes around a value that holds either.
