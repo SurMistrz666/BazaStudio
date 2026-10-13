@@ -21,8 +21,10 @@ const NOTES_LIMIT: usize = 4000;
 pub const SOURCE_URL: &str = "https://github.com/SurMistrz666/BazaStudio";
 /// The releases of the application, with their packages.
 pub const RELEASES_URL: &str = "https://github.com/SurMistrz666/BazaStudio/releases";
-/// The newest release; GitHub redirects it to the release page.
-pub const DOWNLOADS_URL: &str = "https://github.com/SurMistrz666/BazaStudio/releases/latest";
+/// Where packages are downloaded: the list of releases. GitHub's "latest"
+/// address leaves out preview releases, so it would find nothing while
+/// every release is a preview.
+pub const DOWNLOADS_URL: &str = RELEASES_URL;
 /// The user guide: the README of the repository.
 pub const GUIDE_URL: &str = "https://github.com/SurMistrz666/BazaStudio#readme";
 

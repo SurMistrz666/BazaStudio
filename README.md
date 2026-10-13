@@ -4,6 +4,8 @@
 
 [Watch the full film](docs/media/baza-studio-promo.mp4) (MP4, 46 seconds, no sound)
 
+**[Download the newest release](https://github.com/SurMistrz666/BazaStudio/releases/latest)** for Windows and macOS, or see [every release](https://github.com/SurMistrz666/BazaStudio/releases).
+
 Baza Studio is a native desktop database client for Windows and macOS. It speaks to relational databases (PostgreSQL, MySQL / MariaDB, SQLite, Microsoft SQL Server, Oracle), analytical ones (ClickHouse, DuckDB), key-value and document stores (Redis, MongoDB, Cassandra, Amazon DynamoDB) and search engines (Elasticsearch, OpenSearch), plus the cloud services built on them. It is written in Rust and draws its own window with egui and wgpu: there is no Electron, no WebView and no browser engine inside, and it runs without a Python server or Docker. All of its code is in `native/`. The program is free software under GPL-3.0-or-later and is an early preview (0.4.0-preview.1).
 
 ## Supported databases
