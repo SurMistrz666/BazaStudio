@@ -1,0 +1,987 @@
+{
+  "version": 1,
+  "upstream_version": "0.9.0",
+  "upstream_git_commit": "003b698e99e024f3621b8043a2426fde5b741171",
+  "source": "crates.io published packages, verified SHA256 equals pre-patch Cargo.lock",
+  "archives": {
+    "sqlx-postgres": "87a2bdd6e83f6b3ea525ca9fee568030508b58355a43d0b2c1674d5f79dcd65e",
+    "sqlx-mysql": "90b8020fe17c5f2c245bfa2505d7ef59c5604839527c740266ad2214acebea27"
+  },
+  "files": [
+    {
+      "crate": "sqlx-postgres",
+      "path": ".cargo_vcs_info.json",
+      "sha256": "3f5f23361f406ff0359c17a3a67210ac0345f7a387c9cc8348e4e8b47f894fd4"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "Cargo.toml",
+      "sha256": "6dc974c55ac97ddf1005f549fbdc4d46c641974191499357d2001ee9af17c125"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "Cargo.toml.orig",
+      "sha256": "c509150be3f6718d208bc4bdec97fc815943bb1e9bb4fb9ff56eda4de18d8f1c"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "LICENSE-APACHE",
+      "sha256": "154397a08d0cb342110281129971868cd562542d0780b0d10722788cd11a1399"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "LICENSE-MIT",
+      "sha256": "72af89a828df52a9dcc42512ed64663b3b8d7961dd7a5586d44478eede82bc7a"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/advisory_lock.rs",
+      "sha256": "979f34dc7ca90b5674406ad3f93a39313fb0f9e2515b435c54a60ae2e4ca53a0"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/any.rs",
+      "sha256": "99cf43503a74181bce0dc18dee554de113e5c48a49ccad81b3c90d9f7ef0e345"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/arguments.rs",
+      "sha256": "9cf557fe3d45139768e1149f3610d393875de91e646daed5384be511e086f556"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/bind_iter.rs",
+      "sha256": "2f1856eb989ea621ce0d15c8af6d99518cbac9cd19e32f94266ee4e3f8f3ea5e"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/column.rs",
+      "sha256": "029bd155ffc40b4d38f0aaf58ed3792d2d7022f358eaac66f59fef0c320c8774"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/connection/describe.rs",
+      "sha256": "5f6be121170f1d0c4f3deff8db992ac84f56b1679b1b0430125b4b25d14d0541"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/connection/establish.rs",
+      "sha256": "bd68ddaf75db5239b4701f03ff90efddf4259835ccb10c58e12454ecaadeb3a1"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/connection/executor.rs",
+      "sha256": "721ead17743d912c625a56b5728669d8111c750797b6fee24e234226a5b6fbe6"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/connection/mod.rs",
+      "sha256": "efeafd9bc07c0bd20e0d2c2312bd2db45039c9d139aa754b1ff6574dd280de72"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/connection/resolve.rs",
+      "sha256": "8db3f9ac44236d3c86b336b6046e0fe91cd01e44b7f583ef7ab4b784ba9e50cf"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/connection/sasl.rs",
+      "sha256": "3ce9b4eb68ea03eb1f9b9aa2673d777183203daabab01ebfd72479136cf65899"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/connection/stream.rs",
+      "sha256": "185f39afdd96284a7dd1f40fff1a9292fd289c85c2106c65a121045b551c00c5"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/connection/tls.rs",
+      "sha256": "e93bd2605e010a71b9a0200b27dfdd101a8427385dc39468e522fb6547958e07"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/copy.rs",
+      "sha256": "06a2bd576ae6659023380d973c4bb7c60b659436a7441f4725218a6beb76c689"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/database.rs",
+      "sha256": "8abf34d10d91d9025609699db5ec1061785a26ea72ccdadaa777e0af0bbbb6b3"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/error.rs",
+      "sha256": "1a4c4f60a9bddd3965f781b92ac66d9a95e520a2e88ddbf19972a644bf17cbf0"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/io/buf_mut.rs",
+      "sha256": "bfeb8991e7bbbf6134ff83a67f6c65820c693b0d7e8b2ef8a9aa4444a696cecd"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/io/mod.rs",
+      "sha256": "5ffb01f5b17c83c11d10de097142c514b17e1bb8544d767d238539bcaeda9ab9"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/lib.rs",
+      "sha256": "cb50e3b0a6b038c81719c4972acc6d28eac003156a4e7e255316d84c76380514"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/listener.rs",
+      "sha256": "bd8e909f848db7271b7024983c18547cfe18223bea52c8e6ecacaa0b5f410233"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/authentication.rs",
+      "sha256": "d72a8a381d686fcb719f5582db48bd4e5bcb64931baa30f736179fdc2fd3341d"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/backend_key_data.rs",
+      "sha256": "add437e94e69b7152695094517885c3f4dde48bb53aeb10201c2e67446034d1a"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/bind.rs",
+      "sha256": "f48f6c588d710bcf0807f5c7f630ab85ad733026ea43c143a14f316aa091c3ed"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/close.rs",
+      "sha256": "1cedb64d6208ee051d1cb3e5734116489a3bde4ca62ad159ad04533b460b507d"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/command_complete.rs",
+      "sha256": "c2950bddc035e86dcc5d97c3d0d6aaea821f957d5ecccdb5fcd99e44d2611930"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/copy.rs",
+      "sha256": "d42d3097114a1085c9e643b2378705a8661c40075d5d11e302d9801ea63bf290"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/data_row.rs",
+      "sha256": "50a13a82c07ff5cd3734cb5bbbc69eb51e85a4960a105ae357f16308a388be47"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/describe.rs",
+      "sha256": "c9b13e5fb99e48bcec2af8215f07b84d8de610a500175ccbb504beeed4ac7f34"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/execute.rs",
+      "sha256": "779ea6f980d56cde11b50ff37a72a96eab3837c1c1a2fe28caa73a0fac7180c2"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/flush.rs",
+      "sha256": "b20b5850e008c9a14f2dd942c5da0dd08b8d4ebde74bde96ddcc2d4a9ecbccb5"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/mod.rs",
+      "sha256": "8be84536b93e50775654c8e7207ca144e1b78d2c12953bb43eec72690da3f0d9"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/notification.rs",
+      "sha256": "b15c7260232e29ebf3dc2712af0ed12426fb1777f039110364aaf609cb062d6e"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/parameter_description.rs",
+      "sha256": "cefef4381ce4e9fde9961d849d30c1c36b48198b1b26744c6d0e175b8bdd933d"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/parameter_status.rs",
+      "sha256": "9d95d05077699a856e63fb3f88ecfca14de6805fe9595132744fa24d20da14b5"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/parse_complete.rs",
+      "sha256": "02b06b13961142e8052c4543357dac18c217587891e66d38489a470448514bf3"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/parse.rs",
+      "sha256": "9ec502f111e5bbcb2f8173c78b121a1caa0c19246181946612fd8ad2d071cf78"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/password.rs",
+      "sha256": "68bf988d1300d8498faad72fcb53fbbcac843fc8db304131f073511bf2c25f85"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/query.rs",
+      "sha256": "4d256ea1648ee8a42ee126007982986ab6b55afd98e6412999272600f8387381"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/ready_for_query.rs",
+      "sha256": "fe79869e33d0da9f218350817915a0f88cd536ae7ccd3604e376f96e5918fe9b"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/response.rs",
+      "sha256": "364300af0da9e85d435daab4dd0fa887355cf859b6aed7f89a2e453101126072"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/row_description.rs",
+      "sha256": "af5e046634af3fd61b7f2771b206c60976b6985fb552bf34f43baa5966f82d6d"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/sasl.rs",
+      "sha256": "3bdda8fd09c45623c6544166959d3e2b3f20d80548f3cfe5330a3d4f868d5804"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/ssl_request.rs",
+      "sha256": "53b87eb7bb3156e1fbe1f27a1aa757ce1583183d9b8b8abaa73edfa6d98f766d"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/startup.rs",
+      "sha256": "9e1781291a648be9058b0b9f0014355a6510725ef88e04f19a545a5600518b00"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/sync.rs",
+      "sha256": "5a2c8fe69cb07a856092dbae6703a0c946812cf10db90115c6a02253caf99647"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/message/terminate.rs",
+      "sha256": "bf70e28b7f2bc61d6686c48ef221f3c1a3a9f222ebb7453cd3aeb0f6ca7fd716"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/migrate.rs",
+      "sha256": "de1fb1f13fa2d4afb887a9037cb2d517ae0f8e08ba5c0cc76c71a6ff18a44866"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/options/connect.rs",
+      "sha256": "48889caf4c11fc11952b7c0dd038e07108b4011344c697d51f232f56d588c4b9"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/options/doc.md",
+      "sha256": "33882b389d8c5733da137d0fdda411188c22e922f79adac9dfdde8b959506f4c"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/options/mod.rs",
+      "sha256": "1886a4cf46dfdf57d33c78403f9588c3e2f429641dcbd5837f4c8b29273fbc36"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/options/parse.rs",
+      "sha256": "b4ce65626f5cac13e048a6dbae6a063857c8245a655178352a5a61bc659f7666"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/options/pgpass.rs",
+      "sha256": "96f1bcf5c3573a5af90b27241a887ad5fc53547895a9803091532a7be9574080"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/options/ssl_mode.rs",
+      "sha256": "24f9be300645a3e23c61530671c1eb7a491086cda7e4e9a47ec4968a5297136c"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/query_result.rs",
+      "sha256": "8858d975a4e2fc0e80c5880be9c3add174ef056ade336a6287ee648d8d0f9b62"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/row.rs",
+      "sha256": "a65585b8c6e585f9429e3af7867bdeca3d1a2363760b452df785eb12a60edadf"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/statement.rs",
+      "sha256": "d9f6a36611672f5cbd755a1fa389c4e63fa3ae17984362c5b5f7e0c94bbd754c"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/testing/mod.rs",
+      "sha256": "fb94867585c3a7a9779f7c3a57460d0c4db7f733a83a7434bbcf93dfa09db4b4"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/transaction.rs",
+      "sha256": "3f326f8d6bf840a112cb98e465390d9add493b88f87e8a56006d91396bc0ce00"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/type_checking.rs",
+      "sha256": "074d3bdade4108f7051acb285ca4dbb42a1647ff641b55afd44e3e6c3a0a44b3"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/type_info.rs",
+      "sha256": "c5a1576dac0cbb9be48d186052a631faa78200e2e69c4a9b78596ccf878afebe"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/array.rs",
+      "sha256": "e4c34e06ba827fb3924257df58be63ec735ea8440287d52a7ed056ccbf99f821"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/bigdecimal-range.md",
+      "sha256": "968dac5676a333f1953df12b9ed1beb930537e6fae190140ac729e8dc16b2749"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/bigdecimal.rs",
+      "sha256": "8b818a2fb6fb2917fec92401eed0556f6f19b188e1bb6bef56928ce4d36bb5a9"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/bit_vec.rs",
+      "sha256": "b3f120d07c9ba2e16f60c1ca498ef6b347cd522de32d1dce01a723b50cab5d04"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/bool.rs",
+      "sha256": "4ade8342b8f63bd7b33bf6e878591796420491079c072e09e683c0279e7a102d"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/bytes.rs",
+      "sha256": "d4850ba4e8d9bf662074471879036763da6d57a2d86db2b56801b82a1b780719"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/chrono/date.rs",
+      "sha256": "96d053917becadd885f2417521d690f140b1ad49fb12acda9502ffc14bc04060"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/chrono/datetime.rs",
+      "sha256": "cad2020b1ae7dd3b7b734b2a762f847210c87eda0af6222e8b87eb2409e11bbd"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/chrono/mod.rs",
+      "sha256": "32f64ebfce9248c267bc6734716c39157fa00d5504a9578b85790c10bb672bf6"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/chrono/time.rs",
+      "sha256": "5e0b99da298402a0bdd9116575e285991f9ceef9d62a947f6ff1cc31370e6035"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/citext.rs",
+      "sha256": "3995b5807aeda68262de20009233f2ee82b2579a510f26316134730e71dd33fb"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/cube.rs",
+      "sha256": "d9bce5160101bc29d8239b5308567d02beb2c509dd1a8bf057cd7e400b36c8a5"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/float.rs",
+      "sha256": "f450fc0113ff18dbd1868775153a4cd989dfdd6650c12caa555518288cbbafb5"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/geometry/box.rs",
+      "sha256": "c45c766ebd954904876df09be65854df1fa95ecfc0d4720cca41ac6194c7d98e"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/geometry/circle.rs",
+      "sha256": "e255595815272d3c7cd9be04f800fd629f1b113092a71f5a930d7fa36ac80f88"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/geometry/line_segment.rs",
+      "sha256": "4fece26104f95418a760c6b0e2cdea2e7bf41a5af05cde4e03758a1a4232818d"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/geometry/line.rs",
+      "sha256": "b160a29fbd80ddebbf60bb877b08391651a42c478729035af955d47aa656e52b"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/geometry/mod.rs",
+      "sha256": "e620ccb5e2ee7b385090ed19244f628aaf77f0b96d1b12129c2789b9afe9ac9e"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/geometry/path.rs",
+      "sha256": "e35a9b4ab12d26b2317a09c18db16c8b0fc59f94c04c8048ba94dfa79ee24859"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/geometry/point.rs",
+      "sha256": "82df096fd5c62780858ca1efd7cb9e5a53f958c1748191923fafec8f4a5f5b10"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/geometry/polygon.rs",
+      "sha256": "37add7a2c134cd435ae940999218cb149569067bcc8ac60b52bc91e9439bd010"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/hstore.rs",
+      "sha256": "6ae215a7c70b577038816031c4874970b4727d4ed11665794a403a1a3b3f9b73"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/int.rs",
+      "sha256": "747a52950d1f07a5e124ff375a8cb18f4d82d90172fe775e6b4e239af89bcdff"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/interval.rs",
+      "sha256": "499670796f10b13a41703e6a2fae287da5ce4fe3c310aa9885a436d05b1c4215"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/ipnet/ipaddr.rs",
+      "sha256": "714ab6e26c2ed3557588c91cd8e73cdcb349646581e3456f3cc5ff1c26dc7182"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/ipnet/ipnet.rs",
+      "sha256": "5d222c3ed39ac8763e8ecb9ccfe03069f6b0e41b48920ad15b998dee09ef9e3c"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/ipnet/mod.rs",
+      "sha256": "0ed539539b878b2cf6559e9c8a76324a129199daa75a2ae2ee39d251d2fecaf0"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/ipnetwork/ipaddr.rs",
+      "sha256": "1e7b4fff8a36c5be98c9187c7e72ee7c9cbe47afaf5396a416d8888e471995cc"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/ipnetwork/ipnetwork.rs",
+      "sha256": "e0279872b2c28518c4e0a0fa6a5f2546c0c51bb81630305ee5cc342b9d51197a"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/ipnetwork/mod.rs",
+      "sha256": "a67917a49378a579709b91330b8a8c4b79c65d8f817cda9230f34f2e577bdd4a"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/json.rs",
+      "sha256": "a7343984bf6b2d1aa031ad60890a9bf1e39e4667df94381b53dbf02951ce1dae"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/lquery.rs",
+      "sha256": "4636b7e54ded97181ad19063d795cd5c3064a2dd043dee9eeefca659fb00082f"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/ltree.rs",
+      "sha256": "7ff83c99cd2130d221ed7ddc527f52085ac8f9e6aee41e079d48c5dc51ce3295"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/mac_address.rs",
+      "sha256": "fd330557132ab6df24a9a4e2407d2885347eb26ef2f79d24f612f49ca0d5ab82"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/mod.rs",
+      "sha256": "ec2b7ff40e74aab418d459c0483fc28ae8f5becabf0e09d0d3b8c301e5c8160e"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/money.rs",
+      "sha256": "9c94722979e67671c62e881773a4aa478ce5a69ae983dc3c6ed0213c6f10e64b"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/numeric.rs",
+      "sha256": "08522610ab1862fa47746ef1105a5b86959d19198f68b4e337792189afd8628e"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/oid.rs",
+      "sha256": "a268d6519ce4656af68a012f54649dffecbd5166fc93cb68cf5f1ec19bf3023a"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/range.rs",
+      "sha256": "442dcc1d36b427e48aef24b046b5a88c1ec51008427f5d06354228d945bb4773"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/record.rs",
+      "sha256": "6f63808e1974ac6a06026571bf6cdabbbd161c93c617d14dc4ca3615241df1f8"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/rust_decimal-range.md",
+      "sha256": "50ea63448f02e7f4acb78d9f78f06d435d50460adb9a79223c8626f1e7598e8a"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/rust_decimal.rs",
+      "sha256": "4e5f3b08f1d40add3c8797f41ba8f28af114824b5a02cb0d35d8742c99fb442e"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/str.rs",
+      "sha256": "4ea69e4640bf53fec800742a05930121e70afbaa4ffce19c0c9d182a283aeca8"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/text.rs",
+      "sha256": "2d2eed73fc9350a38b892dd553189346685835a6d4ca18139cce6c8f40640e0f"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/time_tz.rs",
+      "sha256": "f92531ab0ccb3700694570c4a95a95a9cfb9f7e110df9da2b2b3f5f1079c64d1"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/time/date.rs",
+      "sha256": "ce1196c33e187df1d05e1145bd684f44837c701b81a751ee648bfda0494e1fab"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/time/datetime.rs",
+      "sha256": "7f3bb4a37a992cb88a9e28aee98c4fee529350527da1eebd2504b125421992b8"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/time/mod.rs",
+      "sha256": "2a9b0bd99f3bc6056cba009ed22e2dda958472f3396be1046fd58b3eaca4c77f"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/time/time.rs",
+      "sha256": "4fdf167559e4a8cc0aa6de0918d6e7120ae06776799fe2dfd3a475139fb1bd3a"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/tuple.rs",
+      "sha256": "f34df3f1e8440f485c3970dd7270411ade105a48b750cbcdd8b96456583bb9b0"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/uuid.rs",
+      "sha256": "47649777028fa971d331006af64b7685664d4a2a09fa8f2455d3f81560c5710b"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/types/void.rs",
+      "sha256": "79fa3e4e4bd70216e9f3dd6cdd0a84995322b21aabbb1fba005c7b4c108048e3"
+    },
+    {
+      "crate": "sqlx-postgres",
+      "path": "src/value.rs",
+      "sha256": "80f9303a892fb97ac0a4084532bc03e0a344d881495cad1af2d2357150cde0c6"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": ".cargo_vcs_info.json",
+      "sha256": "7f97bcde51e4077685fffcb40f0ed5cd3f4aa7d6877a65cd7f5a82deee54a0e9"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "Cargo.toml",
+      "sha256": "0d25105cde6ae3cf46a26dc243d75a5caae5b861bc2a98c9fe1804a97d097f46"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "Cargo.toml.orig",
+      "sha256": "f68374a926b7a8b9af4526e6c4460438904f9c8fcafd291d54159775a208ad45"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "LICENSE-APACHE",
+      "sha256": "154397a08d0cb342110281129971868cd562542d0780b0d10722788cd11a1399"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "LICENSE-MIT",
+      "sha256": "72af89a828df52a9dcc42512ed64663b3b8d7961dd7a5586d44478eede82bc7a"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/any.rs",
+      "sha256": "68eb9fc074f44b4acec06ce8f1348fc742f2ec817db306b22ce2b5455f00515a"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/arguments.rs",
+      "sha256": "71a253d195aad8d8f1ec75bb484a6295059e96588c608e2ad96324b37e09cf64"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/collation.rs",
+      "sha256": "7066b423724d4a997941fdee347171b759564522425bf7f696c9eac0e4d0911d"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/column.rs",
+      "sha256": "56485876607f2fd2170bdd28e082c42ebfa2be952b166d36f3f828cdb4930630"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/connection/auth.rs",
+      "sha256": "b7f2d2a7fe030800bebb57d138097b3c52ca2805c1e17de0f89dcd3d9451cc46"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/connection/establish.rs",
+      "sha256": "7bc8d80265e9675851bfbe7773bc0a71124b31b03ee6e139440c54060109e0ef"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/connection/executor.rs",
+      "sha256": "20aee2661aeed3391f26b0bead4e74ee6863cebd23a45f52e864a2f53c981303"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/connection/mod.rs",
+      "sha256": "377a92cd8ff3814e21761d10a4903405541627cfb18dde5bbb8c41a94440e4d8"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/connection/stream.rs",
+      "sha256": "324317e9fb07b71099d660455b04b813e99ccb4c691cf64c512ef747d081f09f"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/connection/tls.rs",
+      "sha256": "f3db5e5f25a0d329aca4b78994b3d5bf488e3ba390b57a5fb55922b1528efd5a"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/database.rs",
+      "sha256": "c2b0325eff4c79ceb2f3dc884c043fbb2ca3cf7835835c9332fea7fe78af82de"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/error.rs",
+      "sha256": "a74555bb775c564411324b6f4f5b50c60f3c29b870ac46ef5d61ba1dcac92e00"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/io/buf_mut.rs",
+      "sha256": "742d8d6d263fc560af4b0f4eb61f574f1e1b10b4c267f0ceb80201781468b3de"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/io/buf.rs",
+      "sha256": "6fd459a7f98d55c7ab193b045ecf7abb236f97f0a1d4cbcb658d98c869f4ff9f"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/io/mod.rs",
+      "sha256": "16fa6d936720941dba9a1360f9cd52c43a756789eabbedbee2607dd1435421ca"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/lib.rs",
+      "sha256": "bb81380c88f13b5d79229430744871a59284ece6a8accc96e184619a1e239834"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/migrate.rs",
+      "sha256": "fcf60a7a57fac8a88f51473bd47bdc6f5e9ae6c7f46009f76142fc81062b98e4"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/options/connect.rs",
+      "sha256": "879d8744d1fb5a42951b5ca47ea2b5a1bdef55a33e7db9adb51b4a6e43d0548d"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/options/mod.rs",
+      "sha256": "4a63886b566b9fdda470296aaf67602dd003256c1e34f5ca95fd21dba250031a"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/options/parse.rs",
+      "sha256": "0c0ba730de258af1f9c3469d780307231c3e4a303d5f1262f639bd2785d4431f"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/options/ssl_mode.rs",
+      "sha256": "561df19ec075ff80927115c7cf824c7da5584019506b1fcf5b20b5045b9fba20"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/auth.rs",
+      "sha256": "819aa9120d66c01a67e1daa19f78d6a68b6854ad7860c2defc66f77b6e9d1f3b"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/capabilities.rs",
+      "sha256": "acd84b12c532260b7c82c217e61d35d91e921bf526015f69387fc765c182aeca"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/connect/auth_switch.rs",
+      "sha256": "a189b2e048b1f84d9297d034c6d267c7e63762ae02f42d9032133d351b9d144e"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/connect/handshake_response.rs",
+      "sha256": "78601aa9c771cfb95cab4c75e1e6736cdacd6fd416a767be7b99ab06cb7892b0"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/connect/handshake.rs",
+      "sha256": "1fb1712b244d9c78d3cd479745bf000b641aa8c7e40fd7d3eb67fcc0be1489d6"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/connect/mod.rs",
+      "sha256": "4f2ca8248365c169b7905dd51f673323936a75b10448eccc7aaf0a348b15ce88"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/connect/ssl_request.rs",
+      "sha256": "0ce0ee91739612dd137a6184c0a0f958c3eb45636ff07e67f65ffede1a325054"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/mod.rs",
+      "sha256": "ecee331c419d233acec445ce348dd224b02d57a0beebbd3dc3f74f596131a831"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/packet.rs",
+      "sha256": "b7b4b5ac776056d9837fd0dde3de5422fcb6e88c1bbead00470d681b6666a2f2"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/response/eof.rs",
+      "sha256": "fcd5ca2cd80d24fa90460e7b689cc3e21997a70bc538d3084abca3167f26bad2"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/response/err.rs",
+      "sha256": "7dac5bae3da4c35853154980d8892df84ae1c362af123bb347282c8c7f8fa1c1"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/response/mod.rs",
+      "sha256": "73a4f054d5ad4c8e20d8f01983dde2acf449aa46e5c95eb9090e3f2b01845d56"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/response/ok.rs",
+      "sha256": "1338dc9a25b1cbddfd27a4dc386903ca66dadf002aa5dd310adeb1dc2eb57f13"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/response/status.rs",
+      "sha256": "14852304fb8966473bfe0b2515d7dd59e3af353a33952f0729ba7ab4bf2c2cb8"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/row.rs",
+      "sha256": "7da798ff62e0b7b88278f5d540cad54b8feeeec85231c15ede823b27ab8a26fc"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/statement/execute.rs",
+      "sha256": "a1e2efaf4ad81c6fc43fdbce352a500f24fd63c7d5cfaaa73e826c882e55dfc6"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/statement/mod.rs",
+      "sha256": "4f2a53103abb6d94274a7b31d19523afddfe0b11d8d28b990c20fcc305631969"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/statement/prepare_ok.rs",
+      "sha256": "589ebe96847510c63f20861d1ff0311f64faa732bfe7d86913483ff776050c37"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/statement/prepare.rs",
+      "sha256": "c4a1b5e0ca5c5bbb94018209afd89276e8d3245364967f0f14fcabf88d71f4e9"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/statement/row.rs",
+      "sha256": "05f92b78603ed127c8b2750c1bc36790f8fe48b7674c28eae3901508293e3d09"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/statement/stmt_close.rs",
+      "sha256": "21f8f6e24d384202ffae2c368ddd2767820c3a915bd9a69c9e93d3d0fe4b04a2"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/text/column.rs",
+      "sha256": "b63d16567ba239d90a41e2f2bf4f95d9b2c8a616f4be88b8a2be7f072ce540f9"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/text/mod.rs",
+      "sha256": "5962af46b9cdd45b86b1b0df7141fa0b93e69e116f094ccedcaddc80f19c8d22"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/text/ping.rs",
+      "sha256": "e84241b5ce8922b552c023506c51c5d8c66bcd73c5884e291ea553776d2c3dfb"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/text/query.rs",
+      "sha256": "2b5f41ce8655ecb505d920590dab79bc752b366a6e694bb8fef18a0b61766a08"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/text/quit.rs",
+      "sha256": "8a3fa23fb9c0dd724dd5721b979b6dcf8439d1e8d9ad2b448c0ef6234a0094ed"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/protocol/text/row.rs",
+      "sha256": "f7982c28b6541f74f073a24edfba66c9b6ee65c741e4b6c2876f2e573dd26c6a"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/query_result.rs",
+      "sha256": "bf1b1fcaae197ea4b4ade9193d0dfb44ca89589c98a6c4d8fa3d070cfc435f13"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/row.rs",
+      "sha256": "941636d197c4efd482e42dd27484abaffccfd62b68fd5f3e07ac20ee89e1f778"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/statement.rs",
+      "sha256": "e8b2bde4cc737fe97e113748e010eb2ffa40ca7964d6d9904d775ebc2234386a"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/testing/mod.rs",
+      "sha256": "f2d595a29f4e2845731b1a91594f9853514a67f1301208301351e5245582711f"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/transaction.rs",
+      "sha256": "80b01a1f6563e0761231b59778db929f28c85943825b9b43be333892dc3cb55a"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/type_checking.rs",
+      "sha256": "664ff13298c664d00f624083c5c574664b7dc7a521362ab7180c9286a3531660"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/type_info.rs",
+      "sha256": "cf8b920fdec881050d159a7108ca91c11df13b995ae921474f8f21ea61a74bfc"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/bigdecimal.rs",
+      "sha256": "671b189a031ae90e4a1092f6a97a12ce126bf16034e2649ffe24e4eddf029f7f"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/bool.rs",
+      "sha256": "acec22a905594a34b3a6aac0efa24e6f9eb75f5f024831d2e83ebb1156967afb"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/bytes.rs",
+      "sha256": "7b1d93047238397ac4be2b7463d2c3bb0f391ea3bd7d57436424b40749bee8b9"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/chrono.rs",
+      "sha256": "6afe3c0c69a428f1e3113a120efb6448d235400805d4edd0aaf73ab9b90b161c"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/float.rs",
+      "sha256": "8d0dec1740358e378fea555439010840055214c480171b318e60b55cee026b44"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/inet.rs",
+      "sha256": "2494aebfd111000b9ae33c3455562108b5e54770938efaa5ee7f112a0abfcb8d"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/int.rs",
+      "sha256": "df75ca7e01f781b1af86da924bc026d8d8193e6bd31fefd930c546c413f4edf4"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/json.rs",
+      "sha256": "bda8b6b7b8718b3fb9b0f50925249ad8dda41728044c75b174b6d6f09d64bd36"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/mod.rs",
+      "sha256": "e047c987dd2d8aa39473615ab847253edbed0335aed349bfdbdd8734e1189e58"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/mysql_time.rs",
+      "sha256": "c980283596e7a47b17283e428a4c11bb3dc70176f52c4652041994af79b21c5e"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/rust_decimal.rs",
+      "sha256": "607eecbfd8cbbacd2aedb1d43a070d946dbbeaa3df87b2a58110a926db097da5"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/str.rs",
+      "sha256": "8078090d2cf794f61e615c32f90ca17825ed807367b3fe62bfe69f4a0f6bc9ff"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/text.rs",
+      "sha256": "1cddb3434f9484c295fef6f549ffb8570b0d335e4d0ad544733dd34a98be25dc"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/time.rs",
+      "sha256": "b6d9e17f1ec25597c9a5ffeece1dc236c266c30a1359c67b61907625c682d1df"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/uint.rs",
+      "sha256": "f36c13e7082d04e90cb129778e5f851b28464aa1f342afcf35d930dfcdf66d1e"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/types/uuid.rs",
+      "sha256": "682474968d27a02843384d2bc0664da57c4d7f2777a5839502046841ec898998"
+    },
+    {
+      "crate": "sqlx-mysql",
+      "path": "src/value.rs",
+      "sha256": "99a5ef78c7e1586071badf4ace86bc3703599131d9a45254238ea8ec9e5dde77"
+    }
+  ]
+}

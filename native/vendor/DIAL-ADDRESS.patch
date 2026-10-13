@@ -1,0 +1,190 @@
+--- a/sqlx-postgres/src/connection/stream.rs
++++ b/sqlx-postgres/src/connection/stream.rs
+@@ -42,9 +42,21 @@
+ 
+ impl PgStream {
+     pub(super) async fn connect(options: &PgConnectOptions) -> Result<Self, Error> {
+-        let socket_result = match options.fetch_socket() {
+-            Some(ref path) => net::connect_uds(path, MaybeUpgradeTls(options)).await?,
+-            None => net::connect_tcp(&options.host, options.port, MaybeUpgradeTls(options)).await?,
++        let socket_result = match options.dial_address {
++            Some(address) => {
++                net::connect_tcp(
++                    &address.ip().to_string(),
++                    address.port(),
++                    MaybeUpgradeTls(options),
++                )
++                .await?
++            }
++            None => match options.fetch_socket() {
++                Some(ref path) => net::connect_uds(path, MaybeUpgradeTls(options)).await?,
++                None => {
++                    net::connect_tcp(&options.host, options.port, MaybeUpgradeTls(options)).await?
++                }
++            },
+         };
+ 
+         let socket = socket_result?;
+--- a/sqlx-postgres/src/options/mod.rs
++++ b/sqlx-postgres/src/options/mod.rs
+@@ -1,6 +1,7 @@
+ use std::borrow::Cow;
+ use std::env::var;
+ use std::fmt::{self, Display, Write};
++use std::net::SocketAddr;
+ use std::path::{Path, PathBuf};
+ 
+ pub use ssl_mode::PgSslMode;
+@@ -17,6 +18,7 @@
+ pub struct PgConnectOptions {
+     pub(crate) host: String,
+     pub(crate) port: u16,
++    pub(crate) dial_address: Option<SocketAddr>,
+     pub(crate) socket: Option<PathBuf>,
+     pub(crate) username: String,
+     pub(crate) password: Option<String>,
+@@ -78,6 +80,7 @@
+         PgConnectOptions {
+             port,
+             host,
++            dial_address: None,
+             socket: None,
+             username,
+             password: var("PGPASSWORD").ok(),
+@@ -132,6 +135,21 @@
+     pub fn host(mut self, host: &str) -> Self {
+         host.clone_into(&mut self.host);
+         self
++    }
++
++    /// Overrides only the TCP destination, for example with a loopback SSH tunnel.
++    /// The original host remains the TLS server name and certificate identity;
++    /// SSL mode, trusted roots, authentication and the logical port are unchanged.
++    /// This forces TCP even when a Unix socket is otherwise configured. The
++    /// override is not read from connection URLs or environment variables.
++    pub fn dial_address(mut self, address: SocketAddr) -> Self {
++        self.dial_address = Some(address);
++        self
++    }
++
++    /// Returns the explicit TCP destination override, if present.
++    pub fn get_dial_address(&self) -> Option<SocketAddr> {
++        self.dial_address
+     }
+ 
+     /// Sets the port to connect to at the server host.
+@@ -671,3 +689,22 @@
+     x.write_char('z').unwrap();
+     assert_eq!(buf, r"x\\y\ \\\ z");
+ }
++
++#[test]
++fn test_dial_address_preserves_server_identity_and_tls_policy() {
++    let endpoint: SocketAddr = "127.0.0.1:32123".parse().unwrap();
++    let original = PgConnectOptions::new_without_pgpass()
++        .host("database.internal.example")
++        .port(5432)
++        .ssl_mode(PgSslMode::VerifyFull)
++        .ssl_root_cert("owned-ca.pem");
++    assert_eq!(original.get_dial_address(), None);
++    let forwarded = original.clone().dial_address(endpoint);
++    assert_eq!(forwarded.get_host(), "database.internal.example");
++    assert_eq!(forwarded.get_port(), 5432);
++    assert!(matches!(forwarded.get_ssl_mode(), PgSslMode::VerifyFull));
++    assert!(
++        matches!(&forwarded.ssl_root_cert, Some(CertificateInput::File(path)) if path == Path::new("owned-ca.pem"))
++    );
++    assert_eq!(forwarded.clone().get_dial_address(), Some(endpoint));
++}
+--- a/sqlx-mysql/src/connection/establish.rs
++++ b/sqlx-mysql/src/connection/establish.rs
+@@ -15,9 +15,15 @@
+     pub(crate) async fn establish(options: &MySqlConnectOptions) -> Result<Self, Error> {
+         let do_handshake = DoHandshake::new(options)?;
+ 
+-        let handshake = match &options.socket {
+-            Some(path) => crate::net::connect_uds(path, do_handshake).await?,
+-            None => crate::net::connect_tcp(&options.host, options.port, do_handshake).await?,
++        let handshake = match options.dial_address {
++            Some(address) => {
++                crate::net::connect_tcp(&address.ip().to_string(), address.port(), do_handshake)
++                    .await?
++            }
++            None => match &options.socket {
++                Some(path) => crate::net::connect_uds(path, do_handshake).await?,
++                None => crate::net::connect_tcp(&options.host, options.port, do_handshake).await?,
++            },
+         };
+ 
+         let stream = handshake?;
+--- a/sqlx-mysql/src/options/mod.rs
++++ b/sqlx-mysql/src/options/mod.rs
+@@ -1,3 +1,4 @@
++use std::net::SocketAddr;
+ use std::path::{Path, PathBuf};
+ 
+ mod connect;
+@@ -63,6 +64,7 @@
+ pub struct MySqlConnectOptions {
+     pub(crate) host: String,
+     pub(crate) port: u16,
++    pub(crate) dial_address: Option<SocketAddr>,
+     pub(crate) socket: Option<PathBuf>,
+     pub(crate) username: String,
+     pub(crate) password: Option<String>,
+@@ -94,6 +96,7 @@
+         Self {
+             port: 3306,
+             host: String::from("localhost"),
++            dial_address: None,
+             socket: None,
+             username: String::from("root"),
+             password: None,
+@@ -123,6 +126,21 @@
+         self
+     }
+ 
++    /// Overrides only the TCP destination, for example with a loopback SSH tunnel.
++    /// The original host remains the TLS server name and certificate identity;
++    /// SSL mode, trusted roots, authentication and the logical port are unchanged.
++    /// This forces TCP even when a Unix socket is otherwise configured. The
++    /// override is not read from connection URLs or environment variables.
++    pub fn dial_address(mut self, address: SocketAddr) -> Self {
++        self.dial_address = Some(address);
++        self
++    }
++
++    /// Returns the explicit TCP destination override, if present.
++    pub fn get_dial_address(&self) -> Option<SocketAddr> {
++        self.dial_address
++    }
++
+     /// Sets the port to connect to at the server host.
+     ///
+     /// The default port for MySQL is `3306`.
+@@ -527,3 +545,25 @@
+         self.collation.as_deref()
+     }
+ }
++
++#[test]
++fn test_dial_address_preserves_server_identity_and_tls_policy() {
++    let endpoint: SocketAddr = "127.0.0.1:32124".parse().unwrap();
++    let original = MySqlConnectOptions::new()
++        .host("database.internal.example")
++        .port(3306)
++        .ssl_mode(MySqlSslMode::VerifyIdentity)
++        .ssl_ca("owned-ca.pem");
++    assert_eq!(original.get_dial_address(), None);
++    let forwarded = original.clone().dial_address(endpoint);
++    assert_eq!(forwarded.get_host(), "database.internal.example");
++    assert_eq!(forwarded.get_port(), 3306);
++    assert!(matches!(
++        forwarded.get_ssl_mode(),
++        MySqlSslMode::VerifyIdentity
++    ));
++    assert!(
++        matches!(&forwarded.ssl_ca, Some(CertificateInput::File(path)) if path == Path::new("owned-ca.pem"))
++    );
++    assert_eq!(forwarded.clone().get_dial_address(), Some(endpoint));
++}

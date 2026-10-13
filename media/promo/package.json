@@ -1,0 +1,26 @@
+{
+  "name": "baza-studio-promo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Promotional film of Baza Studio, rendered from real application captures with Remotion.",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "assets": "node scripts/assets.mjs",
+    "capture": "node scripts/capture.mjs",
+    "studio": "node scripts/assets.mjs && remotion studio src/index.ts",
+    "render": "node scripts/render.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.534",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.534"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "sharp": "0.35.5",
+    "typescript": "5.9.3"
+  }
+}

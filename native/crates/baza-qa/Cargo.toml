@@ -1,0 +1,24 @@
+[package]
+name = "baza-qa"
+description = "Acceptance tools for Baza Studio; built and tested with the workspace, never packaged."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "BazaQa"
+path = "src/main.rs"
+
+[dependencies]
+baza-core = { path = "../baza-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+uuid.workspace = true
+zeroize.workspace = true

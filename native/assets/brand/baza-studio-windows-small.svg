@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!--
+    Baza Studio application icon: Windows small sizes (16, 24, 32 px).
+    Drawn on a 16 px grid in half-pixel steps, so every edge is crisp at 32 px and rows keep
+    one crisp edge at 16 px. The plate takes over the role of the frame of the mark: a cyan
+    keyline replaces the frame, the three rows and the prompt chevron stay.
+  -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2a323f"/>
+      <stop offset="1" stop-color="#12151a"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="3" y1="3" x2="13" y2="13" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9be8fa"/>
+      <stop offset="1" stop-color="#55b5ea"/>
+    </linearGradient>
+  </defs>
+  <rect width="16" height="16" rx="3.5" fill="url(#plate)"/>
+  <rect x="0.5" y="0.5" width="15" height="15" rx="3" fill="none" stroke="#6cd5ef" stroke-opacity="0.45"/>
+  <g fill="url(#ink)">
+    <rect x="3" y="2.5" width="10" height="1.5" rx="0.6"/>
+    <rect x="3" y="6.5" width="10" height="1.5" rx="0.6"/>
+    <rect x="3" y="10.5" width="4.5" height="1.5" rx="0.6"/>
+  </g>
+  <path d="M10 9.4l2.5 1.85L10 13.1" fill="none" stroke="#eafaff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

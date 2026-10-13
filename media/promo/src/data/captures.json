@@ -1,0 +1,1152 @@
+{
+  "window": {
+    "width": 1280,
+    "height": 720
+  },
+  "scale": 2,
+  "shots": {
+    "connection/database/000": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "connection/database/001": {
+      "x": 534,
+      "y": 407,
+      "w": 406,
+      "h": 36
+    },
+    "connection/database/002": {
+      "x": 534,
+      "y": 407,
+      "w": 406,
+      "h": 36
+    },
+    "connection/database/003": {
+      "x": 534,
+      "y": 407,
+      "w": 406,
+      "h": 36
+    },
+    "connection/database/004": {
+      "x": 534,
+      "y": 407,
+      "w": 406,
+      "h": 36
+    },
+    "connection/engine": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "connection/engine-menu": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "connection/host/000": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "connection/host/001": {
+      "x": 534,
+      "y": 251,
+      "w": 406,
+      "h": 36
+    },
+    "connection/host/002": {
+      "x": 534,
+      "y": 251,
+      "w": 406,
+      "h": 36
+    },
+    "connection/host/003": {
+      "x": 534,
+      "y": 251,
+      "w": 406,
+      "h": 36
+    },
+    "connection/host/004": {
+      "x": 534,
+      "y": 251,
+      "w": 406,
+      "h": 36
+    },
+    "connection/host/005": {
+      "x": 534,
+      "y": 251,
+      "w": 406,
+      "h": 36
+    },
+    "connection/host/006": {
+      "x": 534,
+      "y": 251,
+      "w": 406,
+      "h": 36
+    },
+    "connection/host/007": {
+      "x": 534,
+      "y": 251,
+      "w": 406,
+      "h": 36
+    },
+    "connection/host/008": {
+      "x": 534,
+      "y": 251,
+      "w": 406,
+      "h": 36
+    },
+    "connection/host/009": {
+      "x": 534,
+      "y": 251,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/000": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "connection/name/001": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/002": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/003": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/004": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/005": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/006": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/007": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/008": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/009": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/010": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/011": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/012": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/013": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/014": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/015": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/016": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/name/017": {
+      "x": 534,
+      "y": 172,
+      "w": 406,
+      "h": 36
+    },
+    "connection/open": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "connection/password/000": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "connection/password/001": {
+      "x": 534,
+      "y": 368,
+      "w": 406,
+      "h": 36
+    },
+    "connection/password/002": {
+      "x": 534,
+      "y": 368,
+      "w": 406,
+      "h": 36
+    },
+    "connection/password/003": {
+      "x": 534,
+      "y": 368,
+      "w": 406,
+      "h": 36
+    },
+    "connection/password/004": {
+      "x": 534,
+      "y": 368,
+      "w": 406,
+      "h": 36
+    },
+    "connection/password/005": {
+      "x": 534,
+      "y": 368,
+      "w": 406,
+      "h": 36
+    },
+    "connection/password/006": {
+      "x": 534,
+      "y": 368,
+      "w": 406,
+      "h": 36
+    },
+    "connection/port/000": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "connection/port/001": {
+      "x": 534,
+      "y": 290,
+      "w": 406,
+      "h": 36
+    },
+    "connection/port/002": {
+      "x": 534,
+      "y": 290,
+      "w": 406,
+      "h": 36
+    },
+    "connection/port/003": {
+      "x": 534,
+      "y": 290,
+      "w": 406,
+      "h": 36
+    },
+    "connection/port/004": {
+      "x": 534,
+      "y": 290,
+      "w": 406,
+      "h": 36
+    },
+    "connection/saved": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "connection/user/000": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "connection/user/001": {
+      "x": 534,
+      "y": 329,
+      "w": 406,
+      "h": 36
+    },
+    "connection/user/002": {
+      "x": 534,
+      "y": 329,
+      "w": 406,
+      "h": 36
+    },
+    "connection/user/003": {
+      "x": 534,
+      "y": 329,
+      "w": 406,
+      "h": 36
+    },
+    "connection/user/004": {
+      "x": 534,
+      "y": 329,
+      "w": 406,
+      "h": 36
+    },
+    "connection/user/005": {
+      "x": 534,
+      "y": 329,
+      "w": 406,
+      "h": 36
+    },
+    "connection/user/006": {
+      "x": 534,
+      "y": 329,
+      "w": 406,
+      "h": 36
+    },
+    "connection/user/007": {
+      "x": 534,
+      "y": 329,
+      "w": 406,
+      "h": 36
+    },
+    "sql/default": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "sql/result": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "sql/run-hover": {
+      "x": 1100,
+      "y": 78,
+      "w": 180,
+      "h": 48
+    },
+    "sql/selected": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/001": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/002": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/003": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/004": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/005": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/006": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/007": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/008": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/009": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/010": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/011": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/012": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/013": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/014": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/015": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/016": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/017": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/018": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/019": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/020": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/021": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/022": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/023": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/024": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/025": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/026": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/027": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/028": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/029": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/030": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/031": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/032": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/033": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/034": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/035": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/036": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/037": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/038": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/039": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/040": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/041": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/042": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/043": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/044": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/045": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/046": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/047": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/048": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/049": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/050": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/051": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/052": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/053": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/054": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "sql/typed/055": {
+      "x": 248,
+      "y": 128,
+      "w": 760,
+      "h": 136
+    },
+    "ssh/host/000": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "ssh/host/001": {
+      "x": 534,
+      "y": 205,
+      "w": 406,
+      "h": 36
+    },
+    "ssh/host/002": {
+      "x": 534,
+      "y": 205,
+      "w": 406,
+      "h": 36
+    },
+    "ssh/host/003": {
+      "x": 534,
+      "y": 205,
+      "w": 406,
+      "h": 36
+    },
+    "ssh/host/004": {
+      "x": 534,
+      "y": 205,
+      "w": 406,
+      "h": 36
+    },
+    "ssh/host/005": {
+      "x": 534,
+      "y": 205,
+      "w": 406,
+      "h": 36
+    },
+    "ssh/host/006": {
+      "x": 534,
+      "y": 205,
+      "w": 406,
+      "h": 36
+    },
+    "ssh/host/007": {
+      "x": 534,
+      "y": 205,
+      "w": 406,
+      "h": 36
+    },
+    "ssh/host/008": {
+      "x": 534,
+      "y": 205,
+      "w": 406,
+      "h": 36
+    },
+    "ssh/host/009": {
+      "x": 534,
+      "y": 205,
+      "w": 406,
+      "h": 36
+    },
+    "ssh/on": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "ssh/tab": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "stills/ssh": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "table/cell": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "table/column": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "table/column-menu": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "table/edit/000": {
+      "x": 248,
+      "y": 298,
+      "w": 1032,
+      "h": 32
+    },
+    "table/edit/001": {
+      "x": 248,
+      "y": 298,
+      "w": 1032,
+      "h": 32
+    },
+    "table/edit/002": {
+      "x": 248,
+      "y": 298,
+      "w": 1032,
+      "h": 32
+    },
+    "table/edit/003": {
+      "x": 248,
+      "y": 298,
+      "w": 1032,
+      "h": 32
+    },
+    "table/edit/004": {
+      "x": 248,
+      "y": 298,
+      "w": 1032,
+      "h": 32
+    },
+    "table/filter/000": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "table/filter/001": {
+      "x": 248,
+      "y": 78,
+      "w": 1032,
+      "h": 48
+    },
+    "table/filter/002": {
+      "x": 248,
+      "y": 78,
+      "w": 1032,
+      "h": 48
+    },
+    "table/filter/003": {
+      "x": 248,
+      "y": 78,
+      "w": 1032,
+      "h": 48
+    },
+    "table/filter/004": {
+      "x": 248,
+      "y": 78,
+      "w": 1032,
+      "h": 48
+    },
+    "table/filter/005": {
+      "x": 248,
+      "y": 78,
+      "w": 1032,
+      "h": 48
+    },
+    "table/filter/006": {
+      "x": 248,
+      "y": 78,
+      "w": 1032,
+      "h": 48
+    },
+    "table/filter/007": {
+      "x": 248,
+      "y": 78,
+      "w": 1032,
+      "h": 48
+    },
+    "table/filtered": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "table/open": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "table/saved": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "table/start": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "themes/amethyst": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "themes/graphite": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "themes/menu": {
+      "x": 960,
+      "y": 0,
+      "w": 320,
+      "h": 240
+    },
+    "themes/midnight": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "themes/oled": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "themes/vscode": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "tls/menu": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "tls/required": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "tls/save-hover": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "tls/tab": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "tls/test-hover": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "tls/tested": {
+      "x": 316,
+      "y": 75,
+      "w": 648,
+      "h": 570
+    },
+    "tour/builder-grouped": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "tour/builder-result": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "tour/history": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    },
+    "tour/transfer": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720
+    }
+  },
+  "sequences": {
+    "connection/database": [
+      "connection/database/000",
+      "connection/database/001",
+      "connection/database/002",
+      "connection/database/003",
+      "connection/database/004"
+    ],
+    "connection/host": [
+      "connection/host/000",
+      "connection/host/001",
+      "connection/host/002",
+      "connection/host/003",
+      "connection/host/004",
+      "connection/host/005",
+      "connection/host/006",
+      "connection/host/007",
+      "connection/host/008",
+      "connection/host/009"
+    ],
+    "connection/name": [
+      "connection/name/000",
+      "connection/name/001",
+      "connection/name/002",
+      "connection/name/003",
+      "connection/name/004",
+      "connection/name/005",
+      "connection/name/006",
+      "connection/name/007",
+      "connection/name/008",
+      "connection/name/009",
+      "connection/name/010",
+      "connection/name/011",
+      "connection/name/012",
+      "connection/name/013",
+      "connection/name/014",
+      "connection/name/015",
+      "connection/name/016",
+      "connection/name/017"
+    ],
+    "connection/password": [
+      "connection/password/000",
+      "connection/password/001",
+      "connection/password/002",
+      "connection/password/003",
+      "connection/password/004",
+      "connection/password/005",
+      "connection/password/006"
+    ],
+    "connection/port": [
+      "connection/port/000",
+      "connection/port/001",
+      "connection/port/002",
+      "connection/port/003",
+      "connection/port/004"
+    ],
+    "connection/user": [
+      "connection/user/000",
+      "connection/user/001",
+      "connection/user/002",
+      "connection/user/003",
+      "connection/user/004",
+      "connection/user/005",
+      "connection/user/006",
+      "connection/user/007"
+    ],
+    "sql/typed": [
+      "sql/typed/001",
+      "sql/typed/002",
+      "sql/typed/003",
+      "sql/typed/004",
+      "sql/typed/005",
+      "sql/typed/006",
+      "sql/typed/007",
+      "sql/typed/008",
+      "sql/typed/009",
+      "sql/typed/010",
+      "sql/typed/011",
+      "sql/typed/012",
+      "sql/typed/013",
+      "sql/typed/014",
+      "sql/typed/015",
+      "sql/typed/016",
+      "sql/typed/017",
+      "sql/typed/018",
+      "sql/typed/019",
+      "sql/typed/020",
+      "sql/typed/021",
+      "sql/typed/022",
+      "sql/typed/023",
+      "sql/typed/024",
+      "sql/typed/025",
+      "sql/typed/026",
+      "sql/typed/027",
+      "sql/typed/028",
+      "sql/typed/029",
+      "sql/typed/030",
+      "sql/typed/031",
+      "sql/typed/032",
+      "sql/typed/033",
+      "sql/typed/034",
+      "sql/typed/035",
+      "sql/typed/036",
+      "sql/typed/037",
+      "sql/typed/038",
+      "sql/typed/039",
+      "sql/typed/040",
+      "sql/typed/041",
+      "sql/typed/042",
+      "sql/typed/043",
+      "sql/typed/044",
+      "sql/typed/045",
+      "sql/typed/046",
+      "sql/typed/047",
+      "sql/typed/048",
+      "sql/typed/049",
+      "sql/typed/050",
+      "sql/typed/051",
+      "sql/typed/052",
+      "sql/typed/053",
+      "sql/typed/054",
+      "sql/typed/055"
+    ],
+    "ssh/host": [
+      "ssh/host/000",
+      "ssh/host/001",
+      "ssh/host/002",
+      "ssh/host/003",
+      "ssh/host/004",
+      "ssh/host/005",
+      "ssh/host/006",
+      "ssh/host/007",
+      "ssh/host/008",
+      "ssh/host/009"
+    ],
+    "table/edit": [
+      "table/edit/000",
+      "table/edit/001",
+      "table/edit/002",
+      "table/edit/003",
+      "table/edit/004"
+    ],
+    "table/filter": [
+      "table/filter/000",
+      "table/filter/001",
+      "table/filter/002",
+      "table/filter/003",
+      "table/filter/004",
+      "table/filter/005",
+      "table/filter/006",
+      "table/filter/007"
+    ]
+  }
+}

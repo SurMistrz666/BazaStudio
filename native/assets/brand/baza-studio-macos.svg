@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!--
+    Baza Studio application icon: macOS master (64 px and larger).
+    1024 canvas with the standard 824 px continuous-corner plate and a baked-in drop shadow.
+    macOS 26 and later re-mask bundle icons to their rounder plate, so nothing important
+    sits in the corners. The artwork inside the group is drawn in plate units (0..1024) and
+    matches baza-studio-windows.svg: the portal mark on its 28 unit grid, scaled 27x.
+    Smaller sizes come from baza-studio-macos-small.svg.
+  -->
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="9"/>
+      <feOffset dy="11"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.38"/></feComponentTransfer>
+    </filter>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2a313d"/>
+      <stop offset="0.55" stop-color="#1b1f27"/>
+      <stop offset="1" stop-color="#111419"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="300" cy="140" r="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6cd5ef" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#6cd5ef" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.03"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="3" y1="4" x2="25" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a5ecfb"/>
+      <stop offset="0.45" stop-color="#6cd5ef"/>
+      <stop offset="1" stop-color="#3b8ddb"/>
+    </linearGradient>
+    <linearGradient id="pane" x1="0" y1="4" x2="0" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0c0f14" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#0c0f14" stop-opacity="0.55"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.1"/>
+    </filter>
+    <path id="plate-shape" d="M352.2 0L671.8 0C773.21 0 823.92 0 878.5 17.26C938.1 38.95 985.05 85.9 1006.74 145.5C1024 200.08 1024 250.79 1024 352.2L1024 671.8C1024 773.21 1024 823.92 1006.74 878.5C985.05 938.1 938.1 985.05 878.5 1006.74C823.92 1024 773.21 1024 671.8 1024L352.2 1024C250.79 1024 200.08 1024 145.5 1006.74C85.9 985.05 38.95 938.1 17.26 878.5C0 823.92 0 773.21 0 671.8L0 352.2C0 250.79 0 200.08 17.26 145.5C38.95 85.9 85.9 38.95 145.5 17.26C200.08 0 250.79 0 352.2 0Z"/>
+    <clipPath id="plate-clip"><use href="#plate-shape"/></clipPath>
+  </defs>
+
+  <use href="#plate-shape" transform="translate(100 100) scale(0.8046875)" filter="url(#shadow)"/>
+
+  <g transform="translate(100 100) scale(0.8046875)">
+    <!-- Plate: dark gradient, a faint cyan sheen from the top left and a light inner rim. -->
+    <use href="#plate-shape" fill="url(#plate)"/>
+    <use href="#plate-shape" fill="url(#sheen)"/>
+    <use href="#plate-shape" fill="none" stroke="url(#rim)" stroke-width="12" clip-path="url(#plate-clip)"/>
+
+    <!-- Portal mark: framed sheet, three rows, prompt chevron. -->
+    <g transform="translate(134 134) scale(27)" fill="none" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="4" width="22" height="20" rx="4.2" fill="url(#pane)"/>
+      <g stroke="#6cd5ef" opacity="0.32" filter="url(#glow)">
+        <rect x="3" y="4" width="22" height="20" rx="4.2"/>
+        <path d="M17.9 17l3 1.9-3 1.9"/>
+      </g>
+      <rect x="3" y="4" width="22" height="20" rx="4.2" stroke="url(#ink)"/>
+      <path d="M7.95 9.1h12.1M7.95 14h12.1M7.95 18.9h5.9" stroke="url(#ink)" opacity="0.92"/>
+      <path d="M17.9 17l3 1.9-3 1.9" stroke="#eafaff"/>
+    </g>
+  </g>
+</svg>

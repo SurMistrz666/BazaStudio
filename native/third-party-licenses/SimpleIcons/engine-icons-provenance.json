@@ -1,0 +1,31 @@
+{
+  "project": "Simple Icons",
+  "commit": "98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d",
+  "license": "CC0-1.0",
+  "license_url": "https://raw.githubusercontent.com/simple-icons/simple-icons/98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d/LICENSE.md",
+  "purpose": "Engine identification only; no affiliation claim",
+  "render": "64 x 64 transparent PNG, sharp; vector silhouette unchanged",
+  "icons": [
+    {
+      "engine": "postgresql",
+      "source_url": "https://raw.githubusercontent.com/simple-icons/simple-icons/98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d/icons/postgresql.svg",
+      "source_sha256": "c8ccadbd88c9312c2ad3734c4861b31d3485ce179ee91d64793143f83cfa745c",
+      "tint": "#74B6E9",
+      "png_sha256": "1bf5b65b23f9c835ceacf538762f1ff4116a1164e533806b8b4b1d36a9e56cdf"
+    },
+    {
+      "engine": "mariadb",
+      "source_url": "https://raw.githubusercontent.com/simple-icons/simple-icons/98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d/icons/mariadb.svg",
+      "source_sha256": "477435746bb2024048c7b71529f615fb70d7e679618f37bac49f78fd07e67dfe",
+      "tint": "#E8BE83",
+      "png_sha256": "02f26b08ac9d630deff5a56b11d76dde4355019aea1038a207e52c0213b63d65"
+    },
+    {
+      "engine": "sqlite",
+      "source_url": "https://raw.githubusercontent.com/simple-icons/simple-icons/98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d/icons/sqlite.svg",
+      "source_sha256": "71d4153bc9661dfe6b92dad70f737ec2b6c7c839311e502b4ca66fe664fe12b6",
+      "tint": "#71C4E9",
+      "png_sha256": "466a6029ce4d58e6d344327c91e392594395834a4b73abe131c263cd4eb538cd"
+    }
+  ]
+}

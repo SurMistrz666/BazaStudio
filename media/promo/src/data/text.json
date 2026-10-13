@@ -1,0 +1,13 @@
+{
+  "sql": "SELECT id, name, email, status, revenue\nFROM customers\nWHERE status = 'pending'\nORDER BY id DESC\nLIMIT 100",
+  "cellSuffix": " Ltd",
+  "filterText": "pending",
+  "connectionName": "Shop (production)",
+  "dbHost": "127.0.0.1",
+  "dbPort": "3307",
+  "dbUser": "analyst",
+  "dbName": "shop",
+  "sshHost": "127.0.0.1",
+  "stillSshHost": "bastion.example.test",
+  "stillSshUser": "deploy"
+}

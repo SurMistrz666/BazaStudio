@@ -1,0 +1,24 @@
+* text=auto
+*.sh text eol=lf
+*.yml text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+*.svg text eol=lf
+*.png binary
+*.icns binary
+*.ico binary
+*.ttf binary
+*.bzx binary
+native/THIRD-PARTY-NOTICES.txt -text
+native/THIRD-PARTY-INVENTORY.json text eol=lf
+native/third-party-licenses/** -text
+*.mp4 binary
+*.gif binary
+*.webp binary
+# Files every new database driver adds a line to. Branches that add different
+# engines merge without a conflict: both sides' lines are kept.
+native/crates/baza-core/src/drivers/mod.rs merge=union
+native/Cargo.toml merge=union
+native/crates/baza-core/Cargo.toml merge=union
+native/crates/baza-core/src/drivers/README.md merge=union

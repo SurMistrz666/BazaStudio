@@ -1,0 +1,6 @@
+node_modules/
+# Rendered frames and scratch files of the capture script.
+out/
+# Copied from native/assets by `npm run assets`.
+public/fonts/
+public/brand/

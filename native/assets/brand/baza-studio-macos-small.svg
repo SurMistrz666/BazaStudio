@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!--
+    Baza Studio application icon: macOS small size, the 32 px frame shown at 16 pt on Retina.
+    Drawn on the 32 px grid with a 26 px plate (the standard 824/1024 scale). The plate takes
+    over the role of the frame of the mark: a cyan keyline replaces the frame, the three rows
+    and the prompt chevron stay.
+  -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="3" x2="0" y2="29" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2a323f"/>
+      <stop offset="1" stop-color="#12151a"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="8" y1="7" x2="24" y2="25" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9be8fa"/>
+      <stop offset="1" stop-color="#55b5ea"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="3.75" width="26" height="26" rx="6.4" fill="#000000" fill-opacity="0.2"/>
+  <rect x="3" y="3" width="26" height="26" rx="6.4" fill="url(#plate)"/>
+  <rect x="3.5" y="3.5" width="25" height="25" rx="5.9" fill="none" stroke="#6cd5ef" stroke-opacity="0.45"/>
+  <g fill="url(#ink)">
+    <rect x="8" y="8" width="16" height="2" rx="1"/>
+    <rect x="8" y="14" width="16" height="2" rx="1"/>
+    <rect x="8" y="20" width="6.5" height="2" rx="1"/>
+  </g>
+  <path d="M18.5 18L22.75 21l-4.25 3" fill="none" stroke="#eafaff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
