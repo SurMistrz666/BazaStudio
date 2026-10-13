@@ -462,6 +462,17 @@ impl StudioApp {
             .as_ref()
             .filter(|_| tab.kind == TabKind::Table)
             .map_or(0, |request| request.offset);
+        let live: Option<String> = self
+            .cell_editor
+            .as_ref()
+            .filter(|e| e.all_marked && e.inline && e.tab == tab.id)
+            .map(|e| {
+                if e.null {
+                    "NULL".to_owned()
+                } else {
+                    e.value.clone()
+                }
+            });
         let mut copy_as: Option<CopyAs> = None;
         let mut select_all = false;
         let marked_fill = theme::blend(p.bg, p.accent, 0.20);
@@ -728,8 +739,14 @@ impl StudioApp {
                                             egui::StrokeKind::Inside,
                                         );
                                     }
-                                    let null = matches!(cell, Cell::Null);
-                                    let text: String = cell.display().chars().take(512).collect();
+                                    // A value being typed for several marked cells
+                                    // shows in all of them while it is typed.
+                                    let typed = live.as_deref().filter(|_| in_mark);
+                                    let null = typed.is_none() && matches!(cell, Cell::Null);
+                                    let text: String = match typed {
+                                        Some(value) => value.chars().take(512).collect(),
+                                        None => cell.display().chars().take(512).collect(),
+                                    };
                                     let mut job = egui::text::LayoutJob::simple_singleline(
                                         text,
                                         body_font.clone(),
@@ -1070,7 +1087,7 @@ impl StudioApp {
     /// Write new values into cells of a tab's table in one go: `None` is
     /// NULL. Cells that do not change, or that cannot be changed, are left.
     pub(super) fn edit_cells(&mut self, index: usize, edits: Vec<(usize, usize, Option<String>)>) {
-        let outcome = (|| -> anyhow::Result<(Uuid, Database, Vec<RowChange>)> {
+        let outcome = (|| -> anyhow::Result<PreparedEdits> {
             let tab = &self.tabs[index];
             let result = tab
                 .result
@@ -1104,6 +1121,7 @@ impl StudioApp {
                 .collect::<anyhow::Result<_>>()?;
             anyhow::ensure!(!keys.is_empty(), "primary_key_required");
             let mut changes = Vec::new();
+            let mut shown = Vec::new();
             for (r, c, value) in edits {
                 let (Some(row), Some(column)) = (result.rows.get(r), result.columns.get(c)) else {
                     continue;
@@ -1116,6 +1134,7 @@ impl StudioApp {
                 if &new == old {
                     continue;
                 }
+                shown.push((r, c, new.clone()));
                 changes.push(RowChange::UpdateCell {
                     table: table.clone(),
                     column: column.name.clone(),
@@ -1127,9 +1146,9 @@ impl StudioApp {
                         .collect(),
                 });
             }
-            Ok((tab.id, db, changes))
+            Ok((tab.id, db, changes, shown))
         })();
-        let outcome = outcome.and_then(|(id, db, changes)| {
+        let outcome = outcome.and_then(|(id, db, changes, shown)| {
             let count = changes.len();
             if count > 0 {
                 let inverses = changes
@@ -1141,6 +1160,9 @@ impl StudioApp {
                     self.pending_changes.remove(&id);
                     return Err(error);
                 }
+                // The grid shows the new values at once.
+                let cells: Vec<_> = shown.into_iter().map(|(r, c, v)| (r, c, Some(v))).collect();
+                self.show_now(id, &cells);
             }
             Ok(count)
         });
@@ -2344,6 +2366,9 @@ mod grid_key_tests {
         assert_eq!(grid_target(Key::Enter, false, (7, 2), last, 5), None);
     }
 }
+
+/// A tab, its database, the changes and the new values to show at once.
+type PreparedEdits = (Uuid, Database, Vec<RowChange>, Vec<(usize, usize, Cell)>);
 
 /// Text pasted from a spreadsheet as rows of values: tabs between values,
 /// line breaks between rows, quotes around a value that holds either.

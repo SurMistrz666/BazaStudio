@@ -386,6 +386,22 @@ impl StudioApp {
         let connection = design.connection;
         match result {
             Ok(_) => {
+                // Open data of this table read its columns again.
+                let (schema, name) = (
+                    design.table.schema.clone(),
+                    design.table.name.trim().to_owned(),
+                );
+                for tab in self.tabs.iter_mut().filter(|t| {
+                    t.connection == Some(connection)
+                        && t.source
+                            .as_ref()
+                            .is_some_and(|s| s.schema == schema && s.name == name)
+                }) {
+                    tab.columns.clear();
+                }
+                let Some(design) = self.designs.iter_mut().find(|d| d.id == id) else {
+                    return;
+                };
                 design.new = false;
                 design.table.name = design.table.name.trim().to_owned();
                 design.loading = true;

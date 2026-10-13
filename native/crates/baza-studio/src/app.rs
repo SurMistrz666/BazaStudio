@@ -392,6 +392,8 @@ struct PendingChanges {
     changes: Vec<RowChange>,
     inverses: Vec<Option<RowChange>>,
     kind: ChangeKind,
+    /// The grid already shows the new values: no reload when all went in.
+    shown: bool,
 }
 
 /// The change that takes `change` back. A removed row comes back from its
@@ -1404,6 +1406,16 @@ impl StudioApp {
             }
             None => None,
         };
+        // The columns of the same table are not asked for again with each
+        // page; the designer clears them when it changes the table.
+        let cached_columns = tab
+            .table
+            .as_ref()
+            .zip(inferred.as_ref())
+            .filter(|(before, now)| before.schema == now.schema && before.name == now.name)
+            .filter(|_| !tab.columns.is_empty())
+            .map(|_| tab.columns.clone());
+        let reading_page = page.is_some();
         tab.table = None;
         tab.busy = true;
         tab.request = Uuid::new_v4();
@@ -1427,14 +1439,16 @@ impl StudioApp {
             error: None,
         };
         self.track(async move {
-            let columns = if let Some(table) = &inferred {
-                db.columns(table).await.unwrap_or_default()
-            } else {
-                vec![]
+            let columns = match (&inferred, cached_columns) {
+                (Some(_), Some(columns)) => columns,
+                (Some(table), None) => db.columns(table).await.unwrap_or_default(),
+                (None, _) => vec![],
             };
             let begin = record.clone();
             let r = async {
-                if let Some(v) = v.clone() {
+                // A statement is written down before it runs; reading a page
+                // of a table changes nothing and is written down once, after.
+                if let Some(v) = v.clone().filter(|_| !reading_page) {
                     tokio::task::spawn_blocking(move || v.append_history(&begin))
                         .await
                         .map_err(|_| anyhow::anyhow!("history_task_failed"))??;
@@ -1463,15 +1477,16 @@ impl StudioApp {
                     done.error = Some(e.clone());
                 }
             }
-            if let Some(v) = v {
-                let h = done.clone();
-                let _ = tokio::task::spawn_blocking(move || v.append_history(&h)).await;
-            }
+            // The result goes to the screen first, then into the history.
+            let h = done.clone();
             let _ = prefs;
             let _ = t
                 .send(Message::Query(tabid, request, done, inferred, columns, r))
                 .await;
             ctx.request_repaint();
+            if let Some(v) = v {
+                let _ = tokio::task::spawn_blocking(move || v.append_history(&h)).await;
+            }
         });
     }
     fn reload_tab(&mut self, id: Uuid) {
@@ -1970,14 +1985,18 @@ impl StudioApp {
                     Err(e) => self.notify(e, true),
                 },
                 Message::Mutation(id, r) => {
-                    self.settle_changes(id, usize::from(r.is_ok()));
+                    let shown = self.settle_changes(id, usize::from(r.is_ok()));
                     match r {
+                        Ok(()) if shown => {}
                         Ok(()) => self.reload_tab(id),
-                        Err(e) => self.notify(e, true),
+                        Err(e) => {
+                            self.notify(e, true);
+                            self.reload_tab(id);
+                        }
                     }
                 }
                 Message::Mutations(id, done, error) => {
-                    self.settle_changes(id, done);
+                    let shown = self.settle_changes(id, done);
                     match error {
                         Some(e) => self.notify(e, true),
                         None if done > 1 => {
@@ -1990,8 +2009,11 @@ impl StudioApp {
                         }
                         None => {}
                     }
-                    // Even after a refusal some changes may have been written.
-                    self.reload_tab(id);
+                    // Even after a refusal some changes may have been written;
+                    // without one the grid already shows the new values.
+                    if !shown {
+                        self.reload_tab(id);
+                    }
                 }
                 Message::Dropped(connection, r) => {
                     match r {
@@ -2727,17 +2749,18 @@ impl StudioApp {
         let vault = self.vault.clone();
         let connection_id = self.tab_connection(id);
         self.track(async move {
+            // One entry of the history for the whole batch: writing the
+            // encrypted history once per cell made large edits slow.
+            let text = texts.join(";\n");
             let mut done = 0usize;
-            let mut outcome = Ok(());
-            for (change, text) in changes.iter().zip(texts) {
-                match recorded(vault.clone(), connection_id, &text, db.apply(change)).await {
-                    Ok(()) => done += 1,
-                    Err(error) => {
-                        outcome = Err(error);
-                        break;
-                    }
+            let run = async {
+                for change in &changes {
+                    db.apply(change).await?;
+                    done += 1;
                 }
-            }
+                Ok(())
+            };
+            let outcome = recorded(vault, connection_id, &text, run).await;
             let _ = tx.send(Message::Mutations(id, done, outcome.err())).await;
             ctx.request_repaint();
         });
@@ -2776,16 +2799,19 @@ impl StudioApp {
                 changes: changes.to_vec(),
                 inverses,
                 kind,
+                shown: false,
             },
         );
     }
 
     /// The first `done` changes of a tab were made: they can be taken back
     /// (Mod+Z) or, once taken back, made again (Mod+Shift+Z).
-    fn settle_changes(&mut self, id: Uuid, done: usize) {
+    /// Returns whether the grid already shows every change that was made.
+    fn settle_changes(&mut self, id: Uuid, done: usize) -> bool {
         let Some(pending) = self.pending_changes.remove(&id) else {
-            return;
+            return false;
         };
+        let shown = pending.shown && done == pending.changes.len();
         // Taking back runs the inverses newest first.
         let pairs: Vec<(RowChange, RowChange)> = (0..done.min(pending.changes.len()))
             .rev()
@@ -2796,7 +2822,7 @@ impl StudioApp {
             })
             .collect();
         if pairs.is_empty() {
-            return;
+            return shown;
         }
         let stack = match pending.kind {
             ChangeKind::Do => {
@@ -2810,6 +2836,7 @@ impl StudioApp {
         if stack.len() > 200 {
             stack.remove(0);
         }
+        shown
     }
 
     /// Mod+Z and Mod+Shift+Z in a grid: take back the last change of the
@@ -2850,6 +2877,28 @@ impl StudioApp {
         if let Err(error) = self.mutate_many(id, db, changes) {
             self.pending_changes.remove(&id);
             self.notify(error.to_string(), true);
+        }
+    }
+
+    /// Put new values into the grid of a tab at once, before the database
+    /// answers; the changes waiting for it then need no reload.
+    fn show_now(&mut self, id: Uuid, cells: &[(usize, usize, Option<Cell>)]) {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) else {
+            return;
+        };
+        let Some(result) = tab.result.as_mut() else {
+            return;
+        };
+        for (r, c, value) in cells {
+            if let (Some(value), Some(cell)) = (
+                value,
+                result.rows.get_mut(*r).and_then(|row| row.get_mut(*c)),
+            ) {
+                *cell = value.clone();
+            }
+        }
+        if let Some(pending) = self.pending_changes.get_mut(&id) {
+            pending.shown = true;
         }
     }
 
@@ -3738,10 +3787,16 @@ impl StudioApp {
             vec![inverse],
             ChangeKind::Do,
         );
+        let new = match &change {
+            RowChange::UpdateCell { new, .. } => Some(new.clone()),
+            _ => None,
+        };
         self.mutate(editor.tab, db, change).map_err(|e| {
             self.pending_changes.remove(&editor.tab);
             e.to_string()
-        })
+        })?;
+        self.show_now(editor.tab, &[(editor.row, editor.column, new)]);
+        Ok(())
     }
 }
 

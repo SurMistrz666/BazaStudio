@@ -3065,3 +3065,39 @@ mod platform {
         }
     }
 }
+#[cfg(test)]
+mod timing_probe {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn history_append_cost() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("owned-native-vault");
+        let ns = format!("BazaStudio.QA.{}", uuid::Uuid::new_v4());
+        let vault = Vault::open_owned(&root, &ns).unwrap();
+        let record = |i: usize| crate::model::HistoryRecord {
+            id: uuid::Uuid::new_v4(),
+            connection_id: uuid::Uuid::nil(),
+            sql: format!(
+                "SELECT * FROM customers WHERE id = {i} AND name LIKE '%abc%' ORDER BY id LIMIT 1000"
+            ),
+            status: "completed".into(),
+            started_at: "2026-10-13T00:00:00Z".into(),
+            duration_ms: 3,
+            rows: 1,
+            error: None,
+        };
+        for i in 0..500 {
+            vault.append_history(&record(i)).unwrap();
+        }
+        let started = std::time::Instant::now();
+        for i in 0..20 {
+            vault.append_history(&record(i)).unwrap();
+        }
+        eprintln!(
+            "append_history with 500 records: {:?} each",
+            started.elapsed() / 20
+        );
+        let _ = vault.remove_owned_qa_key();
+    }
+}
