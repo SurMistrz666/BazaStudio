@@ -934,16 +934,20 @@ pub(super) fn page_statement(
         "page_invalid"
     );
     let mut statement = format!("SELECT *\nFROM {}", qualified(dialect, &page.container)?);
-    if !page.filters.is_empty() {
-        let conditions = page
-            .filters
-            .iter()
-            .map(|filter| condition(filter, columns))
-            .collect::<Result<Vec<_>>>()?;
+    let mut conditions = page
+        .filters
+        .iter()
+        .map(|filter| condition(filter, columns))
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(typed) = &page.condition {
+        conditions.push(crate::sql::typed_condition(dialect, typed)?);
+    }
+    if !conditions.is_empty() {
         statement.push_str(&format!("\nWHERE {}", conditions.join(" AND ")));
     }
     let mut terms = Vec::new();
-    if let Some((column, descending)) = &page.order_by {
+    let sorted = page.order_by.iter().chain(&page.then_by);
+    for (column, descending) in sorted.clone() {
         terms.push(format!(
             "{} {}",
             quote_identifier(dialect, column)?,
@@ -954,11 +958,7 @@ pub(super) fn page_statement(
         Order::Unknown => {}
         Order::Key(key) => {
             for name in key {
-                if page
-                    .order_by
-                    .as_ref()
-                    .is_none_or(|(column, _)| column != name)
-                {
+                if !sorted.clone().any(|(column, _)| column == name) {
                     terms.push(quote_identifier(dialect, name)?);
                 }
             }

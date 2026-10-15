@@ -55,6 +55,7 @@ Fields of your own are `OptionField`s: `key`, a Polish and an English `label`, `
 | `browse` | names in the side panel and messages: `Tables`, `Documents` (collections), `Keys` |
 | `schemas` | the schema level of the side panel tree. Without it the containers hang directly under the connection and `TableRef::schema` is empty |
 | `filter`, `sort` | the filter field and the sorting headers of "Dane tabeli" |
+| `condition` | "Warunek SQL" in the filter of "Dane tabeli": a condition the user types, in `PageRequest::condition`. Set only with `language: Sql`; `Database` refuses a page with a condition for an engine without it |
 | `edit_cells`, `insert_rows`, `delete_rows` | in-place editing, "Wiersz" and "Usuń wiersz" in the grid |
 | `table_designer` | "Nowa tabela" everywhere |
 | `query_builder` | the "Kreator zapytań" section and its links |
@@ -90,6 +91,8 @@ pub trait Session: Send + Sync {
 An engine with SQL implements the required methods, `execute_one` (one statement in a transaction that is committed only when exactly one row changed, otherwise `row_changed_reload_required`) and `import_rows` (all rows or none). Pages and grid changes then come from its `Dialect`.
 
 An engine without SQL also overrides `page_text` and `read_page` (filters, order, limit, offset of a `PageRequest`), `change_text` and `apply` (`RowChange::{UpdateCell, InsertRow, DeleteRow}`). `UpdateCell` carries the old value: change the record only while it still holds it, otherwise `row_changed_reload_required`. The texts are what the tab and the history show.
+
+A driver with `condition` whose `page_text` writes its own `WHERE` adds `PageRequest::condition` to it through `sql::typed_condition(&DIALECT, …)`, and nowhere else: that check refuses a second statement, comments, subqueries and functions outside its list, and puts the condition in parentheses. The shared builder does this for the dialect's pages already.
 
 Rules every driver keeps:
 

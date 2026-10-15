@@ -1,31 +1,151 @@
-//! "Kreator zapytań": build a SELECT from the columns, a summary and a group
-//! of one table, see its SQL and run it.
+//! "Kreator zapytań": a SELECT drawn on a canvas. The tables of the
+//! connection are put on it from the list beside it, their columns ticked
+//! into the result, and a column dragged onto a column of another table
+//! relates the two in a join. The pages under the canvas set the clauses;
+//! the SQL beside it is formatted, and runs into the last page.
+use super::shortcuts::take_mod;
 use super::*;
 use crate::widgets::Btn;
-use baza_core::builder::{Projection, QueryBuilder};
+use baza_core::visual::{
+    Aggregate, Condition, Field, JoinKind, Operator, OrderTerm, Output, Relation, VisualQuery,
+};
 use eframe::egui::RichText;
+use std::collections::{HashMap, HashSet};
 
-/// The SELECT the choices of the builder stand for.
-pub(super) fn builder_sql(b: &BuilderUi, dialect: &Dialect) -> anyhow::Result<String> {
-    let mut model = QueryBuilder::table(b.table.clone());
-    for name in &b.selected {
-        model.projections.push(Projection {
-            column: name.clone(),
-            aggregate: None,
-            alias: None,
+/// Width of a table on the canvas, the height of its title and of a column.
+const NODE_WIDTH: f32 = 210.0;
+const HEADER: f32 = 26.0;
+const ROW: f32 = 20.0;
+/// Columns shown at once; a longer table scrolls inside its box.
+const MAX_ROWS: usize = 12;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum BuilderPage {
+    Select,
+    From,
+    Where,
+    Group,
+    Having,
+    Order,
+    Limit,
+    Result,
+}
+
+/// The box of a table on the canvas.
+#[derive(Clone, Copy)]
+pub(super) struct Node {
+    pub pos: egui::Pos2,
+    /// Points the columns inside the box are scrolled by.
+    pub scroll: f32,
+}
+
+pub(super) struct BuilderUi {
+    /// Hidden tab that runs the built query and holds its result.
+    pub tab: Uuid,
+    pub connection: Uuid,
+    pub query: VisualQuery,
+    /// A box for each source of the query, in the same order.
+    pub nodes: Vec<Node>,
+    /// Columns of the tables, by `schema.table`, and the tables asked for.
+    pub columns: HashMap<String, Vec<ColumnInfo>>,
+    pub requested: HashSet<String>,
+    pub page: BuilderPage,
+    /// A relation being drawn from this column.
+    dragging: Option<Field>,
+    /// The relation whose menu is open.
+    relation_menu: Option<usize>,
+    table_search: String,
+}
+
+fn table_key(table: &TableRef) -> String {
+    format!("{}.{}", table.schema, table.name)
+}
+
+impl BuilderUi {
+    /// The columns of a source, `*` first; none while they are read.
+    fn columns_of(&self, source: usize) -> Vec<String> {
+        let Some(table) = self.query.sources.get(source).map(|s| &s.table) else {
+            return Vec::new();
+        };
+        std::iter::once("*".to_owned())
+            .chain(
+                self.columns
+                    .get(&table_key(table))
+                    .into_iter()
+                    .flatten()
+                    .map(|c| c.name.clone()),
+            )
+            .collect()
+    }
+    fn label(&self, field: &Field) -> String {
+        match self.query.sources.get(field.source) {
+            Some(source) => format!("{}.{}", source.alias, field.column),
+            None => "—".into(),
+        }
+    }
+    /// Every column of every source, optionally without `*`.
+    fn fields(&self, star: bool) -> Vec<Field> {
+        (0..self.query.sources.len())
+            .flat_map(|source| {
+                self.columns_of(source)
+                    .into_iter()
+                    .filter(move |column| star || column != "*")
+                    .map(move |column| Field { source, column })
+            })
+            .collect()
+    }
+    /// The first column that is not `*`, for a new item of a page.
+    fn first_field(&self) -> Field {
+        self.fields(false).into_iter().next().unwrap_or(Field {
+            source: 0,
+            column: "*".into(),
+        })
+    }
+    /// Put a table on the canvas, at `at` or in the next free place.
+    fn add_table(&mut self, table: TableRef, at: Option<egui::Pos2>) {
+        let n = self.nodes.len();
+        let pos = at.unwrap_or_else(|| {
+            egui::pos2(
+                24.0 + (n % 4) as f32 * (NODE_WIDTH + 70.0),
+                24.0 + (n / 4) as f32 * (HEADER + ROW * MAX_ROWS as f32 + 60.0),
+            )
         });
+        self.query.add_source(table);
+        self.nodes.push(Node { pos, scroll: 0.0 });
     }
-    if !b.aggregate.is_empty() {
-        model.projections.push(Projection {
-            column: b.aggregate_column.clone(),
-            aggregate: Some(b.aggregate.clone()),
-            alias: Some("result".into()),
-        });
+    fn remove_table(&mut self, index: usize) {
+        self.query.remove_source(index);
+        if index < self.nodes.len() {
+            self.nodes.remove(index);
+        }
+        self.relation_menu = None;
+        self.dragging = None;
     }
-    if !b.group_column.is_empty() {
-        model.group_by.push(b.group_column.clone());
+    /// The output of a column with no summary is ticked on the canvas.
+    fn ticked(&self, field: &Field) -> bool {
+        self.query
+            .outputs
+            .iter()
+            .any(|o| o.field == *field && o.aggregate.is_none())
     }
-    model.sql(dialect)
+    fn toggle(&mut self, field: Field) {
+        if self.ticked(&field) {
+            self.query
+                .outputs
+                .retain(|o| !(o.field == field && o.aggregate.is_none()));
+        } else {
+            self.query.outputs.push(Output {
+                field,
+                aggregate: None,
+                alias: String::new(),
+            });
+        }
+    }
+}
+
+/// What the canvas asks for once drawn.
+enum CanvasAction {
+    AddTable(TableRef, egui::Pos2),
 }
 
 impl StudioApp {
@@ -43,7 +163,8 @@ impl StudioApp {
         id
     }
 
-    /// Start the builder on a table and bring its section forward.
+    /// Put a table on the canvas of the builder and bring it forward. A
+    /// builder of another connection starts over.
     pub(super) fn open_builder(&mut self, connection: Uuid, table: TableRef) {
         if !self.capabilities(Some(connection)).query_builder {
             let text = self.unavailable(
@@ -55,53 +176,107 @@ impl StudioApp {
             return;
         }
         let tab = self.builder_tab();
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab) {
-            tab.cancel.cancel();
-            tab.request = Uuid::new_v4();
-            tab.busy = false;
-            tab.connection = Some(connection);
-            tab.sql.clear();
-            tab.error = None;
-            tab.table = None;
-            tab.columns.clear();
-            if let Some(mut result) = tab.result.take() {
-                for row in &mut result.rows {
-                    for cell in row {
-                        wipe_cell(cell);
+        if self
+            .builder
+            .as_ref()
+            .is_none_or(|b| b.connection != connection)
+        {
+            if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab) {
+                tab.cancel.cancel();
+                tab.request = Uuid::new_v4();
+                tab.busy = false;
+                tab.connection = Some(connection);
+                tab.sql.clear();
+                tab.error = None;
+                tab.table = None;
+                tab.columns.clear();
+                if let Some(mut result) = tab.result.take() {
+                    for row in &mut result.rows {
+                        for cell in row {
+                            wipe_cell(cell);
+                        }
                     }
                 }
             }
+            self.builder = Some(BuilderUi {
+                tab,
+                connection,
+                query: VisualQuery::default(),
+                nodes: Vec::new(),
+                columns: HashMap::new(),
+                requested: HashSet::new(),
+                page: BuilderPage::Select,
+                dragging: None,
+                relation_menu: None,
+                table_search: String::new(),
+            });
         }
-        let request = Uuid::new_v4();
-        let db = self.databases.get(&connection).cloned();
-        self.builder = Some(BuilderUi {
-            tab,
-            connection,
-            table: table.clone(),
-            columns: vec![],
-            request,
-            loading: db.is_some(),
-            loaded: false,
-            selected: vec![],
-            aggregate: String::new(),
-            aggregate_column: "*".into(),
-            group_column: String::new(),
-        });
+        if let Some(b) = self.builder.as_mut()
+            && !b
+                .query
+                .sources
+                .iter()
+                .any(|s| s.table.schema == table.schema && s.table.name == table.name)
+        {
+            b.add_table(table, None);
+        }
         self.section = Section::Builder;
         if let Some(index) = self.tabs.iter().position(|t| t.id == tab) {
             self.active = index;
         }
-        let Some(db) = db else {
+        if !self.databases.contains_key(&connection) {
             self.connect(connection);
+        }
+    }
+
+    /// Ask for the columns of the tables on the canvas not read yet.
+    fn request_builder_columns(&self, b: &mut BuilderUi) {
+        let Some(db) = self.databases.get(&b.connection) else {
             return;
         };
-        let tx = self.tx.clone();
-        let ctx = self.ctx.clone();
-        self.track(async move {
-            let result = db.columns(&table).await.map_err(|e| e.to_string());
-            let _ = tx.send(Message::BuilderColumns(request, result)).await;
-            ctx.request_repaint();
-        });
+        for source in &b.query.sources {
+            let key = table_key(&source.table);
+            if !b.requested.insert(key.clone()) {
+                continue;
+            }
+            let (db, table, connection) = (db.clone(), source.table.clone(), b.connection);
+            let tx = self.tx.clone();
+            let ctx = self.ctx.clone();
+            self.track(async move {
+                let result = db.columns(&table).await.map_err(|e| e.to_string());
+                let _ = tx
+                    .send(Message::BuilderColumns(connection, key, result))
+                    .await;
+                ctx.request_repaint();
+            });
+        }
+    }
+
+    /// The columns of a table of the builder arrived.
+    pub(super) fn builder_columns(
+        &mut self,
+        connection: Uuid,
+        key: String,
+        result: Result<Vec<ColumnInfo>, String>,
+    ) {
+        let Some(b) = self.builder.as_mut().filter(|b| b.connection == connection) else {
+            return;
+        };
+        match result {
+            Ok(columns) => {
+                b.columns.insert(key, columns);
+            }
+            Err(error) => {
+                b.requested.remove(&key);
+                self.notify(error, true);
+            }
+        }
+    }
+
+    /// The SQL of the builder, formatted.
+    fn builder_sql(b: &BuilderUi, dialect: &Dialect) -> anyhow::Result<String> {
+        let text = b.query.sql(dialect)?;
+        baza_core::format::beautify(dialect, &text)
     }
 
     pub(super) fn builder_view(&mut self, ui: &mut egui::Ui) {
@@ -136,227 +311,195 @@ impl StudioApp {
             self.builder_empty(ui);
             return;
         };
-        let connected = self.databases.contains_key(&b.connection);
-        if connected && !b.loaded && !b.loading {
-            // Connected after the builder was opened: read the columns now.
-            let (connection, table) = (b.connection, b.table.clone());
-            self.open_builder(connection, table);
-            self.builder_view(ui);
-            return;
-        }
+        self.request_builder_columns(&mut b);
         let tables = self.tables.get(&b.connection).cloned().unwrap_or_default();
-        let preview = builder_sql(&b, &dialect);
+        let preview = Self::builder_sql(&b, &dialect);
         let busy = self.tabs[index].busy;
-        let (mut run, mut open_editor) = (false, false);
-        let mut switch_table = None;
+        let (mut run, mut open_editor, mut clear) = (false, false, false);
         widgets::toolbar(ui, &p, |ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            let run_button = Btn::primary(l("Pokaż wynik", "Show result"))
+            run = Btn::primary(l("Uruchom", "Run"))
                 .icon(Icon::Play)
-                .enabled(preview.is_ok() && !busy);
-            let room = ui.available_width() - run_button.width(ui, &p) - 40.0;
-            let wide = room > 660.0;
-            let select = ((room - if wide { 250.0 } else { 0.0 }) / 4.0).clamp(74.0, 170.0);
-            let caption = |ui: &mut egui::Ui, text: &str| {
-                if wide {
-                    ui.label(RichText::new(text).size(p.small() + 0.5).color(p.muted));
-                }
-            };
-            caption(ui, l("Tabela", "Table"));
-            widgets::combo(
-                ui,
-                &p,
-                "builder_table",
-                b.table.name.clone(),
-                select,
-                |ui| {
-                    for table in &tables {
-                        let current = table.schema == b.table.schema && table.name == b.table.name;
-                        if ui.selectable_label(current, &table.name).clicked() && !current {
-                            switch_table = Some(table.clone());
-                        }
-                    }
-                },
-            )
-            .response
-            .on_hover_text(l("Tabela", "Table"));
-            caption(ui, l("Podsumowanie", "Summary"));
-            widgets::combo(
-                ui,
-                &p,
-                "aggregate",
-                if b.aggregate.is_empty() {
-                    l("Brak", "None").to_owned()
-                } else {
-                    b.aggregate.clone()
-                },
-                select * 0.8,
-                |ui| {
-                    ui.selectable_value(&mut b.aggregate, String::new(), l("Brak", "None"));
-                    for a in ["COUNT", "SUM", "AVG", "MIN", "MAX"] {
-                        ui.selectable_value(&mut b.aggregate, a.into(), a);
-                    }
-                },
-            )
-            .response
-            .on_hover_text(l("Podsumowanie", "Summary"));
-            ui.add_enabled_ui(!b.aggregate.is_empty(), |ui| {
-                widgets::combo(
-                    ui,
-                    &p,
-                    "aggregate_column",
-                    b.aggregate_column.clone(),
-                    select * 0.8,
-                    |ui| {
-                        ui.selectable_value(&mut b.aggregate_column, "*".into(), "*");
-                        for c in &b.columns {
-                            ui.selectable_value(&mut b.aggregate_column, c.name.clone(), &c.name);
-                        }
-                    },
-                )
-                .response
-                .on_hover_text(l("Kolumna podsumowania", "Summary column"));
-            });
-            caption(ui, l("Grupuj według", "Group by"));
-            widgets::combo(
-                ui,
-                &p,
-                "group_column",
-                if b.group_column.is_empty() {
-                    l("Brak", "None").to_owned()
-                } else {
-                    b.group_column.clone()
-                },
-                select,
-                |ui| {
-                    ui.selectable_value(&mut b.group_column, String::new(), l("Brak", "None"));
-                    for c in &b.columns {
-                        ui.selectable_value(&mut b.group_column, c.name.clone(), &c.name);
-                    }
-                },
-            )
-            .response
-            .on_hover_text(l("Grupuj według", "Group by"));
+                .enabled(preview.is_ok() && !busy)
+                .tip(&format!(
+                    "{} ({})",
+                    l("Uruchom zapytanie", "Run the query"),
+                    super::shortcuts::keys_text("Mod+Enter", en)
+                ))
+                .show(ui, &p)
+                .clicked();
+            open_editor = Btn::quiet(l("Otwórz w edytorze SQL", "Open in SQL editor"))
+                .icon(Icon::Terminal)
+                .enabled(preview.is_ok())
+                .show(ui, &p)
+                .clicked();
+            clear = Btn::quiet(l("Wyczyść", "Clear"))
+                .icon(Icon::Trash)
+                .enabled(!b.query.sources.is_empty())
+                .show(ui, &p)
+                .clicked();
             widgets::right(ui, |ui| {
-                run = run_button.show(ui, &p).clicked();
+                ui.label(
+                    RichText::new(l(
+                        "Przeciągnij kolumnę na kolumnę innej tabeli, aby je połączyć.",
+                        "Drag a column onto a column of another table to relate them.",
+                    ))
+                    .size(p.small())
+                    .color(p.muted),
+                );
             });
         });
+        if !busy && preview.is_ok() && take_mod(ui, false, egui::Key::Enter) {
+            run = true;
+        }
 
-        // Columns of the table.
-        egui::Frame::NONE
-            .inner_margin(egui::Margin {
-                left: 16,
-                right: 16,
-                top: 10,
-                bottom: 6,
-            })
+        // The tables of the connection.
+        let mut chosen_table = None;
+        egui::Panel::left(egui::Id::new("builder_tables"))
+            .resizable(true)
+            .default_size(220.0)
+            .size_range(150.0..=420.0)
+            .frame(
+                egui::Frame::NONE
+                    .fill(p.side)
+                    .inner_margin(egui::Margin::symmetric(8, 8)),
+            )
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(16.0, 4.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new(l("Kolumny", "Columns"))
-                            .size(p.small() + 0.5)
-                            .color(p.muted),
-                    );
-                    if b.loading {
-                        ui.spinner();
-                    } else if b.columns.is_empty() {
-                        ui.label(
-                            RichText::new(if connected {
-                                l("Ta tabela nie ma kolumn.", "This table has no columns.")
-                            } else {
-                                l(
-                                    "Połącz się z bazą, aby wybrać kolumny.",
-                                    "Connect to the database to choose columns.",
-                                )
-                            })
-                            .size(p.body() - 0.5)
-                            .color(p.muted),
-                        );
-                    }
-                    for c in &b.columns {
-                        let mut selected = b.selected.contains(&c.name);
-                        if widgets::checkbox(ui, &p, &mut selected, &c.name).changed() {
-                            if selected {
-                                b.selected.push(c.name.clone());
-                            } else {
-                                b.selected.retain(|v| v != &c.name);
-                            }
-                        }
-                    }
-                    if !b.columns.is_empty() && b.selected.is_empty() {
-                        ui.label(
-                            RichText::new(l(
-                                "nic nie zaznaczono, więc wszystkie",
-                                "nothing selected means all",
-                            ))
-                            .size(p.small())
-                            .color(theme::blend(p.bg, p.muted, 0.8)),
-                        );
-                    }
-                });
+                chosen_table = table_list(ui, &p, en, &mut b, &tables)
             });
 
-        // The SQL the choices above produce.
-        egui::Frame::NONE
-            .inner_margin(egui::Margin {
-                left: 16,
-                right: 16,
-                top: 8,
-                bottom: 12,
-            })
+        // The SQL, formatted.
+        egui::Panel::right(egui::Id::new("builder_sql"))
+            .resizable(true)
+            .default_size(340.0)
+            .size_range(220.0..=700.0)
+            .frame(
+                egui::Frame::NONE
+                    .fill(p.side)
+                    .inner_margin(egui::Margin::symmetric(12, 10)),
+            )
             .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                match &preview {
-                    Ok(sql) => {
-                        let mut job = highlight(sql, p.code(), p);
-                        job.wrap.max_width = ui.available_width();
-                        ui.add(egui::Label::new(job).wrap());
-                        ui.add_space(4.0);
-                        open_editor = Btn::link(l("Otwórz w edytorze SQL", "Open in SQL editor"))
-                            .small()
-                            .show(ui, &p)
-                            .clicked();
-                    }
-                    Err(e) => {
-                        widgets::feedback(
+                widgets::caption(ui, &p, "SQL");
+                ui.add_space(4.0);
+                egui::ScrollArea::both()
+                    .id_salt("builder_sql_text")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match &preview {
+                        Ok(sql) => {
+                            let mut job = highlight(sql, p.code(), p);
+                            job.wrap.max_width = f32::INFINITY;
+                            ui.add(
+                                egui::Label::new(job)
+                                    .selectable(true)
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                            );
+                        }
+                        Err(error) => {
+                            let text = crate::messages::describe(&error.to_string(), en);
+                            widgets::feedback(ui, &p, &text, true);
+                        }
+                    });
+            });
+
+        // The clauses, and the result.
+        let mut heading = None;
+        egui::Panel::bottom(egui::Id::new("builder_clauses"))
+            .resizable(true)
+            .default_size(300.0)
+            .size_range(220.0..=900.0)
+            .frame(egui::Frame::NONE.fill(p.bg))
+            .show(ui, |ui| {
+                egui::Frame::NONE
+                    .fill(p.side)
+                    .inner_margin(egui::Margin::symmetric(12, 0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            for (page, label) in [
+                                (BuilderPage::Select, "SELECT"),
+                                (BuilderPage::From, "FROM"),
+                                (BuilderPage::Where, "WHERE"),
+                                (BuilderPage::Group, "GROUP BY"),
+                                (BuilderPage::Having, "HAVING"),
+                                (BuilderPage::Order, "ORDER BY"),
+                                (BuilderPage::Limit, "LIMIT"),
+                                (BuilderPage::Result, l("Wynik", "Result")),
+                            ] {
+                                if widgets::tab(
+                                    ui,
+                                    &p,
+                                    None,
+                                    label,
+                                    b.page == page,
+                                    12.0,
+                                    true,
+                                    p.control_height() + 4.0,
+                                )
+                                .clicked()
+                                {
+                                    b.page = page;
+                                }
+                            }
+                        });
+                    });
+                widgets::hline(ui, &p);
+                if b.page == BuilderPage::Result {
+                    self.tab_error(ui, index);
+                    heading = Some(self.results_heading(ui, index, false));
+                    if self.tabs[index].result.is_some() {
+                        // The pages decide the order; a header click does not.
+                        self.results_grid(ui, index, false);
+                    } else {
+                        super::sql_view::hint(
                             ui,
                             &p,
-                            &crate::messages::describe(&e.to_string(), en),
-                            true,
+                            l(
+                                "Naciśnij „Uruchom”, aby zobaczyć wynik.",
+                                "Press “Run” to see the result.",
+                            ),
                         );
                     }
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt("builder_page")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            egui::Frame::NONE
+                                .inner_margin(egui::Margin::symmetric(14, 10))
+                                .show(ui, |ui| clause_page(ui, &p, en, &mut b));
+                        });
                 }
             });
 
-        self.tab_error(ui, index);
-        let has_result = self.tabs[index].result.is_some();
-        let actions = self.results_heading(ui, index, false);
-        if has_result {
-            // The builder's own controls decide the order; a header click does not.
-            self.results_grid(ui, index, false);
-        } else {
-            super::sql_view::hint(
-                ui,
-                &p,
-                l(
-                    "Wybierz kolumny i naciśnij „Pokaż wynik”.",
-                    "Choose columns and press “Show result”.",
-                ),
-            );
+        // The canvas takes the rest.
+        let action = canvas(ui, &p, en, &mut b);
+        if let Some(CanvasAction::AddTable(table, at)) = action {
+            b.add_table(table, Some(at));
+        }
+        if let Some(table) = chosen_table {
+            b.add_table(table, None);
+        }
+        if clear {
+            b.query = VisualQuery::default();
+            b.nodes.clear();
+            b.relation_menu = None;
         }
         let tabid = b.tab;
         let connection = b.connection;
-        let title = b.table.name.clone();
+        if run && preview.is_ok() {
+            b.page = BuilderPage::Result;
+        }
         self.builder = Some(b);
-        if actions.insert {
-            self.begin_insert(index);
-        }
-        if actions.delete {
-            self.ask_delete(index);
-        }
-        if actions.export {
-            self.export_result(tabid);
+        if let Some(actions) = heading {
+            if actions.insert {
+                self.begin_insert(index);
+            }
+            if actions.delete {
+                self.ask_delete(index);
+            }
+            if actions.export {
+                self.export_result(tabid);
+            }
         }
         if let Ok(sql) = preview {
             if run {
@@ -365,11 +508,9 @@ impl StudioApp {
                 tab.sql = sql;
                 self.run_tab(tabid, false);
             } else if open_editor {
+                let title = self.tr("Kreator", "Builder").to_owned();
                 self.open_in_editor(Some(connection), &title, sql);
             }
-        }
-        if let Some(table) = switch_table {
-            self.open_builder(connection, table);
         }
     }
 
@@ -391,24 +532,24 @@ impl StudioApp {
                 let (text, label) = if !tables.is_empty() {
                     (
                         l(
-                            "Kreator układa zapytanie SELECT z kolumn, podsumowania i grupowania jednej tabeli. Wybierz tabelę, od której zaczniesz.",
-                            "The builder composes a SELECT from the columns, a summary and a grouping of one table. Choose the table to start from.",
+                            "Kreator rysuje zapytanie SELECT z tabel połączonych relacjami: zaznaczasz kolumny, przeciągasz relacje i ustawiasz klauzule. Wybierz tabelę, od której zaczniesz.",
+                            "The builder draws a SELECT from tables joined by relations: tick columns, drag relations and set the clauses. Choose the table to start from.",
                         ),
                         None,
                     )
                 } else if self.profiles.connections.is_empty() {
                     (
                         l(
-                            "Kreator układa zapytanie SELECT z kolumn jednej tabeli. Najpierw dodaj połączenie z bazą.",
-                            "The builder composes a SELECT from the columns of one table. Add a database connection first.",
+                            "Kreator rysuje zapytanie SELECT z tabel bazy. Najpierw dodaj połączenie z bazą.",
+                            "The builder draws a SELECT from the tables of a database. Add a database connection first.",
                         ),
                         Some(l("Nowe połączenie", "New connection")),
                     )
                 } else {
                     (
                         l(
-                            "Kreator układa zapytanie SELECT z kolumn jednej tabeli. Połącz się z bazą, aby wybrać tabelę.",
-                            "The builder composes a SELECT from the columns of one table. Connect to a database to choose a table.",
+                            "Kreator rysuje zapytanie SELECT z tabel bazy. Połącz się z bazą, aby wybrać tabelę.",
+                            "The builder draws a SELECT from the tables of a database. Connect to a database to choose a table.",
                         ),
                         Some(if focus.is_some() {
                             l("Połącz", "Connect")
@@ -462,5 +603,986 @@ impl StudioApp {
                 self.section = Section::Connections;
             }
         }
+    }
+}
+
+/// The tables of the connection: a click puts one on the canvas, and so
+/// does dragging it there.
+fn table_list(
+    ui: &mut egui::Ui,
+    p: &theme::Palette,
+    en: bool,
+    b: &mut BuilderUi,
+    tables: &[TableRef],
+) -> Option<TableRef> {
+    let l = |pl: &'static str, english: &'static str| if en { english } else { pl };
+    ui.add(
+        widgets::field(p, &mut b.table_search)
+            .hint_text(l("Szukaj tabeli", "Find a table"))
+            .desired_width(f32::INFINITY),
+    );
+    ui.add_space(4.0);
+    let needle = b.table_search.to_lowercase();
+    let mut chosen = None;
+    egui::ScrollArea::vertical()
+        .id_salt("builder_table_list")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for table in tables
+                .iter()
+                .filter(|t| t.name.to_lowercase().contains(&needle))
+            {
+                let (rect, response) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), p.row_height()),
+                    egui::Sense::click_and_drag(),
+                );
+                if response.hovered() {
+                    ui.painter().rect_filled(rect, 4, p.raised_hover);
+                }
+                widgets::paint(
+                    ui.painter(),
+                    egui::Rect::from_center_size(
+                        egui::pos2(rect.left() + 12.0, rect.center().y),
+                        egui::vec2(13.0, 13.0),
+                    ),
+                    if table.kind.contains("view") {
+                        Icon::View
+                    } else {
+                        Icon::Table
+                    },
+                    p.muted,
+                );
+                ui.painter().text(
+                    egui::pos2(rect.left() + 26.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    &table.name,
+                    egui::FontId::proportional(p.body()),
+                    p.text,
+                );
+                response.dnd_set_drag_payload(table.clone());
+                if response.double_clicked() {
+                    chosen = Some(table.clone());
+                }
+                response.on_hover_text(l(
+                    "Przeciągnij na płótno albo kliknij dwukrotnie",
+                    "Drag onto the canvas or double-click",
+                ));
+            }
+        });
+    chosen
+}
+
+/// A short mark of a join, drawn in its circle.
+fn join_mark(kind: JoinKind) -> &'static str {
+    match kind {
+        JoinKind::Inner => "I",
+        JoinKind::Left => "L",
+        JoinKind::Right => "R",
+        JoinKind::Full => "F",
+    }
+}
+
+/// The canvas: the tables as boxes, the relations as curves between their
+/// columns.
+fn canvas(
+    ui: &mut egui::Ui,
+    p: &theme::Palette,
+    en: bool,
+    b: &mut BuilderUi,
+) -> Option<CanvasAction> {
+    let l = |pl: &'static str, english: &'static str| if en { english } else { pl };
+    let mut action = None;
+    let rows_of = |b: &BuilderUi, i: usize| b.columns_of(i).len().max(1);
+    let height_of = |rows: usize| HEADER + rows.min(MAX_ROWS) as f32 * ROW + 6.0;
+    let extent = b
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| node.pos.to_vec2() + egui::vec2(NODE_WIDTH, height_of(rows_of(b, i))))
+        .fold(egui::Vec2::ZERO, |a, c| a.max(c))
+        + egui::vec2(300.0, 300.0);
+    egui::ScrollArea::both()
+        .id_salt("builder_canvas")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let size = extent.max(ui.available_size());
+            let (area, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            let origin = area.min;
+            let painter = ui.painter_at(area);
+            // A dot grid under everything.
+            let step = 24.0;
+            let dot = theme::blend(p.bg, p.line, 0.6);
+            let mut y = area.top() + step;
+            while y < area.bottom() {
+                let mut x = area.left() + step;
+                while x < area.right() {
+                    painter.circle_filled(egui::pos2(x, y), 1.0, dot);
+                    x += step;
+                }
+                y += step;
+            }
+            if b.query.sources.is_empty() {
+                painter.text(
+                    area.min + egui::vec2(28.0, 28.0),
+                    egui::Align2::LEFT_TOP,
+                    l(
+                        "Przeciągnij tabelę z listy po lewej albo kliknij ją dwukrotnie.",
+                        "Drag a table from the list on the left, or double-click it.",
+                    ),
+                    egui::FontId::proportional(p.body()),
+                    p.muted,
+                );
+            }
+            // Geometry of the boxes and of their visible columns.
+            let rect_of = |b: &BuilderUi, i: usize| {
+                egui::Rect::from_min_size(
+                    origin + b.nodes[i].pos.to_vec2(),
+                    egui::vec2(NODE_WIDTH, height_of(rows_of(b, i))),
+                )
+            };
+            // Where a column of a box is: its centre height, kept inside the box.
+            let anchor_y = |b: &BuilderUi, field: &Field| {
+                let rect = rect_of(b, field.source);
+                let row = b
+                    .columns_of(field.source)
+                    .iter()
+                    .position(|c| *c == field.column)
+                    .unwrap_or(0);
+                let top = rect.top() + HEADER + 3.0;
+                let bottom = rect.bottom() - 3.0;
+                (top + row as f32 * ROW - b.nodes[field.source].scroll + ROW / 2.0)
+                    .clamp(top + ROW / 2.0, bottom - ROW / 2.0)
+            };
+            let anchor = |b: &BuilderUi, field: &Field, toward: f32| {
+                let rect = rect_of(b, field.source);
+                let x = if toward > rect.center().x {
+                    rect.right()
+                } else {
+                    rect.left()
+                };
+                egui::pos2(x, anchor_y(b, field))
+            };
+            let curve =
+                |painter: &egui::Painter, a: egui::Pos2, z: egui::Pos2, stroke: egui::Stroke| {
+                    let bend = ((z.x - a.x).abs() * 0.5).max(40.0);
+                    let (da, dz) = if a.x <= z.x {
+                        (bend, -bend)
+                    } else {
+                        (-bend, bend)
+                    };
+                    painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                        [a, a + egui::vec2(da, 0.0), z + egui::vec2(dz, 0.0), z],
+                        false,
+                        egui::Color32::TRANSPARENT,
+                        stroke,
+                    ));
+                };
+            // The relations, under the boxes.
+            let mut marks = Vec::new();
+            for (k, relation) in b.query.relations.iter().enumerate() {
+                if relation.left.source >= b.nodes.len() || relation.right.source >= b.nodes.len() {
+                    continue;
+                }
+                let a = anchor(
+                    b,
+                    &relation.left,
+                    rect_of(b, relation.right.source).center().x,
+                );
+                let z = anchor(
+                    b,
+                    &relation.right,
+                    rect_of(b, relation.left.source).center().x,
+                );
+                curve(&painter, a, z, egui::Stroke::new(1.6, p.accent));
+                marks.push((k, a + (z - a) / 2.0, relation.kind));
+            }
+            // The boxes.
+            let mut rows_hit: Vec<(egui::Rect, Field)> = Vec::new();
+            let mut remove = None;
+            let pointer = ui.input(|i| i.pointer.hover_pos());
+            for i in 0..b.nodes.len() {
+                let rect = rect_of(b, i);
+                let columns = b.columns_of(i);
+                let header = egui::Rect::from_min_size(rect.min, egui::vec2(NODE_WIDTH, HEADER));
+                painter.rect_filled(rect, 6, p.raised);
+                painter.rect_filled(
+                    header,
+                    egui::CornerRadius {
+                        nw: 6,
+                        ne: 6,
+                        sw: 0,
+                        se: 0,
+                    },
+                    theme::blend(p.raised, p.accent, 0.45),
+                );
+                painter.rect_stroke(
+                    rect,
+                    6,
+                    egui::Stroke::new(1.0, p.line),
+                    egui::StrokeKind::Inside,
+                );
+                let source = &b.query.sources[i];
+                let title = if source.alias == source.table.name {
+                    source.alias.clone()
+                } else {
+                    format!("{} ({})", source.alias, source.table.name)
+                };
+                painter.text(
+                    header.left_center() + egui::vec2(10.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    title,
+                    theme::medium(p.body()),
+                    p.text,
+                );
+                let close = egui::Rect::from_center_size(
+                    header.right_center() - egui::vec2(14.0, 0.0),
+                    egui::vec2(16.0, 16.0),
+                );
+                let close_response = ui
+                    .interact(close, ui.id().with(("node_close", i)), egui::Sense::click())
+                    .on_hover_text(l("Usuń z zapytania", "Remove from the query"));
+                widgets::paint(
+                    &painter,
+                    close.shrink(2.0),
+                    Icon::Close,
+                    if close_response.hovered() {
+                        p.text
+                    } else {
+                        p.muted
+                    },
+                );
+                if close_response.clicked() {
+                    remove = Some(i);
+                }
+                // The title moves the box.
+                let drag = ui.interact(
+                    header.with_max_x(close.left() - 2.0),
+                    ui.id().with(("node_move", i)),
+                    egui::Sense::drag(),
+                );
+                if drag.dragged() {
+                    let node = &mut b.nodes[i];
+                    node.pos = (node.pos + drag.drag_delta()).max(egui::Pos2::ZERO);
+                }
+                if drag.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+                // The columns, scrolled inside the box when there are many.
+                let body = egui::Rect::from_min_max(
+                    egui::pos2(rect.left(), header.bottom() + 3.0),
+                    egui::pos2(rect.right(), rect.bottom() - 3.0),
+                );
+                let most = ((columns.len() as f32 - MAX_ROWS as f32) * ROW).max(0.0);
+                if pointer.is_some_and(|at| body.contains(at)) && most > 0.0 {
+                    let delta = ui.input(|i| i.smooth_scroll_delta.y);
+                    if delta != 0.0 {
+                        b.nodes[i].scroll = (b.nodes[i].scroll - delta).clamp(0.0, most);
+                        // The canvas does not scroll with it.
+                        ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+                    }
+                }
+                let scroll = b.nodes[i].scroll.min(most);
+                let clip = painter.with_clip_rect(body);
+                if columns.len() == 1 {
+                    clip.text(
+                        body.left_top() + egui::vec2(28.0, ROW / 2.0),
+                        egui::Align2::LEFT_CENTER,
+                        l("wczytywanie kolumn…", "loading the columns…"),
+                        egui::FontId::proportional(p.small()),
+                        p.muted,
+                    );
+                }
+                for (row, column) in columns.iter().enumerate() {
+                    let top = body.top() + row as f32 * ROW - scroll;
+                    if top + ROW < body.top() || top > body.bottom() {
+                        continue;
+                    }
+                    let line = egui::Rect::from_min_size(
+                        egui::pos2(body.left(), top),
+                        egui::vec2(NODE_WIDTH, ROW),
+                    );
+                    let visible = line.intersect(body);
+                    let field = Field {
+                        source: i,
+                        column: column.clone(),
+                    };
+                    let response = ui.interact(
+                        visible,
+                        ui.id().with(("node_row", i, row)),
+                        egui::Sense::click_and_drag(),
+                    );
+                    if response.hovered() {
+                        clip.rect_filled(line.shrink2(egui::vec2(3.0, 0.0)), 3, p.raised_hover);
+                    }
+                    let mark = egui::Rect::from_center_size(
+                        egui::pos2(line.left() + 14.0, line.center().y),
+                        egui::vec2(12.0, 12.0),
+                    );
+                    if b.ticked(&field) {
+                        clip.rect_filled(mark, 3, p.accent);
+                        widgets::paint(&clip, mark.shrink(2.0), Icon::Check, p.bg);
+                    } else {
+                        clip.rect_stroke(
+                            mark,
+                            3,
+                            egui::Stroke::new(1.0, p.muted),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    clip.text(
+                        egui::pos2(line.left() + 28.0, line.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        column,
+                        egui::FontId::monospace(p.code() - 1.5),
+                        if column == "*" { p.muted } else { p.text },
+                    );
+                    if response.clicked() {
+                        b.toggle(field.clone());
+                    }
+                    // A column dragged onto another table relates the two.
+                    if column != "*" {
+                        if response.drag_started() {
+                            b.dragging = Some(field.clone());
+                        }
+                        rows_hit.push((visible, field));
+                    }
+                }
+            }
+            // The relation being drawn follows the pointer.
+            if let Some(from) = b.dragging.clone() {
+                if let Some(at) = pointer {
+                    let start = anchor(b, &from, at.x);
+                    curve(
+                        &painter,
+                        start,
+                        at,
+                        egui::Stroke::new(1.6, p.accent.gamma_multiply(0.7)),
+                    );
+                }
+                if ui.input(|i| i.pointer.any_released()) {
+                    let target = pointer.and_then(|at| {
+                        rows_hit
+                            .iter()
+                            .find(|(rect, field)| rect.contains(at) && field.source != from.source)
+                            .map(|(_, field)| field.clone())
+                    });
+                    if let Some(to) = target {
+                        b.query.relations.push(Relation {
+                            kind: JoinKind::Inner,
+                            left: from,
+                            right: to,
+                        });
+                    }
+                    b.dragging = None;
+                }
+            }
+            // The marks of the relations, over the boxes: a click opens the menu.
+            for (k, at, kind) in marks {
+                let circle = egui::Rect::from_center_size(at, egui::vec2(20.0, 20.0));
+                let response = ui
+                    .interact(circle, ui.id().with(("relation", k)), egui::Sense::click())
+                    .on_hover_text(kind.sql());
+                painter.circle_filled(at, 10.0, p.bg);
+                painter.circle_stroke(
+                    at,
+                    10.0,
+                    egui::Stroke::new(1.6, if response.hovered() { p.text } else { p.accent }),
+                );
+                painter.text(
+                    at,
+                    egui::Align2::CENTER_CENTER,
+                    join_mark(kind),
+                    egui::FontId::proportional(p.small()),
+                    p.text,
+                );
+                if response.clicked() {
+                    b.relation_menu = Some(k);
+                }
+                if b.relation_menu == Some(k) {
+                    relation_menu(ui, p, en, b, k, at);
+                }
+            }
+            // A table dropped from the list.
+            if let Some(at) = pointer
+                && area.contains(at)
+                && ui.input(|i| i.pointer.any_released())
+                && let Some(table) = egui::DragAndDrop::take_payload::<TableRef>(ui.ctx())
+            {
+                let pos = (at - origin - egui::vec2(NODE_WIDTH / 2.0, HEADER / 2.0))
+                    .max(egui::Vec2::ZERO);
+                action = Some(CanvasAction::AddTable((*table).clone(), pos.to_pos2()));
+            }
+            if let Some(i) = remove {
+                b.remove_table(i);
+            }
+        });
+    action
+}
+
+/// The menu of a relation: its kind of join, or removing it.
+fn relation_menu(
+    ui: &mut egui::Ui,
+    p: &theme::Palette,
+    en: bool,
+    b: &mut BuilderUi,
+    k: usize,
+    at: egui::Pos2,
+) {
+    let l = |pl: &'static str, english: &'static str| if en { english } else { pl };
+    let Some(relation) = b.query.relations.get(k).cloned() else {
+        b.relation_menu = None;
+        return;
+    };
+    let mut close = false;
+    let shown = egui::Area::new(ui.id().with("relation_menu"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(at + egui::vec2(14.0, 14.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::NONE
+                .fill(p.bg)
+                .stroke(egui::Stroke::new(1.0, p.line))
+                .corner_radius(6)
+                .inner_margin(egui::Margin::same(8))
+                .shadow(ui.ctx().global_style().visuals.popup_shadow)
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} = {}",
+                            b.label(&relation.left),
+                            b.label(&relation.right)
+                        ))
+                        .monospace()
+                        .size(p.code() - 1.5)
+                        .color(p.muted),
+                    );
+                    for kind in JoinKind::ALL {
+                        let text = match kind {
+                            JoinKind::Inner => l(
+                                "Tylko pasujące wiersze (INNER)",
+                                "Matching rows only (INNER)",
+                            ),
+                            JoinKind::Left => l(
+                                "Wszystkie wiersze lewej tabeli (LEFT)",
+                                "All rows of the left table (LEFT)",
+                            ),
+                            JoinKind::Right => l(
+                                "Wszystkie wiersze prawej tabeli (RIGHT)",
+                                "All rows of the right table (RIGHT)",
+                            ),
+                            JoinKind::Full => l(
+                                "Wszystkie wiersze obu tabel (FULL)",
+                                "All rows of both tables (FULL)",
+                            ),
+                        };
+                        if ui.selectable_label(relation.kind == kind, text).clicked() {
+                            b.query.relations[k].kind = kind;
+                            close = true;
+                        }
+                    }
+                    ui.separator();
+                    if ui
+                        .button(l("Usuń relację", "Delete the relation"))
+                        .clicked()
+                    {
+                        b.query.relations.remove(k);
+                        close = true;
+                    }
+                });
+        });
+    let outside = ui.input(|i| i.pointer.any_pressed())
+        && ui
+            .input(|i| i.pointer.interact_pos())
+            .is_some_and(|pos| !shown.response.rect.contains(pos) && (pos - at).length() > 12.0);
+    if close || outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        b.relation_menu = None;
+    }
+}
+
+/// A choice of a column of the query.
+fn field_combo(
+    ui: &mut egui::Ui,
+    p: &theme::Palette,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    b: &BuilderUi,
+    field: &mut Field,
+    star: bool,
+    width: f32,
+) {
+    let choices = b.fields(star);
+    widgets::combo(ui, p, egui::Id::new(id), b.label(field), width, |ui| {
+        egui::ScrollArea::vertical()
+            .max_height(300.0)
+            .show(ui, |ui| {
+                for choice in choices {
+                    let label = b.label(&choice);
+                    ui.selectable_value(field, choice, label);
+                }
+            });
+    });
+}
+
+/// A choice of a summary, or none.
+fn aggregate_combo(
+    ui: &mut egui::Ui,
+    p: &theme::Palette,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut Option<Aggregate>,
+    none: &str,
+) {
+    let shown = value.map_or(none.to_owned(), |a| a.label().to_owned());
+    widgets::combo(ui, p, egui::Id::new(id), shown, 140.0, |ui| {
+        ui.selectable_value(value, None, none);
+        for aggregate in Aggregate::ALL {
+            ui.selectable_value(value, Some(aggregate), aggregate.label());
+        }
+    });
+}
+
+/// Buttons that move or remove the item at `index` of a list; returns what
+/// was asked: -1 up, 1 down, 0 remove.
+fn row_tools(
+    ui: &mut egui::Ui,
+    p: &theme::Palette,
+    en: bool,
+    index: usize,
+    len: usize,
+) -> Option<i8> {
+    let l = |pl: &'static str, english: &'static str| if en { english } else { pl };
+    let mut asked = None;
+    ui.add_enabled_ui(index > 0, |ui| {
+        if widgets::icon_button(ui, p, Icon::ArrowUp, l("W górę", "Up")).clicked() {
+            asked = Some(-1);
+        }
+    });
+    ui.add_enabled_ui(index + 1 < len, |ui| {
+        if widgets::icon_button(ui, p, Icon::ArrowDown, l("W dół", "Down")).clicked() {
+            asked = Some(1);
+        }
+    });
+    if widgets::icon_button(ui, p, Icon::Minus, l("Usuń", "Delete")).clicked() {
+        asked = Some(0);
+    }
+    asked
+}
+
+fn apply_tool<T>(items: &mut Vec<T>, index: usize, asked: Option<i8>) {
+    match asked {
+        Some(0) => {
+            items.remove(index);
+        }
+        Some(-1) if index > 0 => items.swap(index, index - 1),
+        Some(1) if index + 1 < items.len() => items.swap(index, index + 1),
+        _ => {}
+    }
+}
+
+fn add_button(ui: &mut egui::Ui, p: &theme::Palette, text: &str, enabled: bool) -> bool {
+    Btn::quiet(text)
+        .icon(Icon::Plus)
+        .small()
+        .enabled(enabled)
+        .show(ui, p)
+        .clicked()
+}
+
+/// One page of the clauses.
+fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderUi) {
+    let l = |pl: &'static str, english: &'static str| if en { english } else { pl };
+    ui.spacing_mut().item_spacing.y = 6.0;
+    let any = !b.query.sources.is_empty();
+    if !any {
+        widgets::help(
+            ui,
+            p,
+            l(
+                "Najpierw dodaj tabelę na płótno.",
+                "Put a table on the canvas first.",
+            ),
+        );
+        return;
+    }
+    match b.page {
+        BuilderPage::Select => {
+            widgets::checkbox(
+                ui,
+                p,
+                &mut b.query.distinct,
+                l("Bez powtórzeń (DISTINCT)", "Without duplicates (DISTINCT)"),
+            );
+            if b.query.outputs.is_empty() {
+                widgets::help(
+                    ui,
+                    p,
+                    l(
+                        "Nic nie wybrano: wynik ma wszystkie kolumny (*).",
+                        "Nothing chosen: the result has every column (*).",
+                    ),
+                );
+            }
+            let len = b.query.outputs.len();
+            let mut tool = None;
+            for index in 0..len {
+                let mut output = b.query.outputs[index].clone();
+                ui.horizontal(|ui| {
+                    field_combo(
+                        ui,
+                        p,
+                        ("out_field", index),
+                        b,
+                        &mut output.field,
+                        true,
+                        260.0,
+                    );
+                    aggregate_combo(
+                        ui,
+                        p,
+                        ("out_aggregate", index),
+                        &mut output.aggregate,
+                        l("bez podsumowania", "no summary"),
+                    );
+                    ui.add(
+                        widgets::field(p, &mut output.alias)
+                            .desired_width(140.0)
+                            .hint_text(l("alias", "alias")),
+                    );
+                    if let Some(asked) = row_tools(ui, p, en, index, len) {
+                        tool = Some((index, asked));
+                    }
+                });
+                b.query.outputs[index] = output;
+            }
+            if let Some((index, asked)) = tool {
+                apply_tool(&mut b.query.outputs, index, Some(asked));
+            }
+            if add_button(ui, p, l("Dodaj kolumnę", "Add a column"), true) {
+                let field = b.first_field();
+                b.query.outputs.push(Output {
+                    field,
+                    aggregate: None,
+                    alias: String::new(),
+                });
+            }
+        }
+        BuilderPage::From => {
+            widgets::caption(ui, p, l("Tabele", "Tables"));
+            let mut remove = None;
+            for index in 0..b.query.sources.len() {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "{}.{}",
+                            b.query.sources[index].table.schema, b.query.sources[index].table.name
+                        ))
+                        .color(p.muted),
+                    );
+                    ui.label(RichText::new("AS").color(p.keyword));
+                    ui.add(
+                        widgets::field(p, &mut b.query.sources[index].alias).desired_width(160.0),
+                    );
+                    if widgets::icon_button(
+                        ui,
+                        p,
+                        Icon::Minus,
+                        l("Usuń tabelę", "Remove the table"),
+                    )
+                    .clicked()
+                    {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = remove {
+                b.remove_table(index);
+            }
+            ui.add_space(6.0);
+            widgets::caption(ui, p, l("Relacje", "Relations"));
+            let len = b.query.relations.len();
+            let mut tool = None;
+            for index in 0..len {
+                let mut relation = b.query.relations[index].clone();
+                ui.horizontal(|ui| {
+                    field_combo(
+                        ui,
+                        p,
+                        ("rel_left", index),
+                        b,
+                        &mut relation.left,
+                        false,
+                        190.0,
+                    );
+                    let shown = relation.kind.sql();
+                    widgets::combo(
+                        ui,
+                        p,
+                        egui::Id::new(("rel_kind", index)),
+                        shown,
+                        130.0,
+                        |ui| {
+                            for kind in JoinKind::ALL {
+                                ui.selectable_value(&mut relation.kind, kind, kind.sql());
+                            }
+                        },
+                    );
+                    field_combo(
+                        ui,
+                        p,
+                        ("rel_right", index),
+                        b,
+                        &mut relation.right,
+                        false,
+                        190.0,
+                    );
+                    if let Some(asked) = row_tools(ui, p, en, index, len) {
+                        tool = Some((index, asked));
+                    }
+                });
+                b.query.relations[index] = relation;
+            }
+            if let Some((index, asked)) = tool {
+                apply_tool(&mut b.query.relations, index, Some(asked));
+            }
+            if add_button(
+                ui,
+                p,
+                l("Dodaj relację", "Add a relation"),
+                b.query.sources.len() > 1,
+            ) {
+                let left = b.first_field();
+                let right = b
+                    .fields(false)
+                    .into_iter()
+                    .find(|f| f.source != left.source)
+                    .unwrap_or_else(|| left.clone());
+                b.query.relations.push(Relation {
+                    kind: JoinKind::Inner,
+                    left,
+                    right,
+                });
+            }
+        }
+        BuilderPage::Where | BuilderPage::Having => {
+            let having = b.page == BuilderPage::Having;
+            let mut list = if having {
+                std::mem::take(&mut b.query.having)
+            } else {
+                std::mem::take(&mut b.query.conditions)
+            };
+            let len = list.len();
+            let mut tool = None;
+            for (index, condition) in list.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    if index == 0 {
+                        ui.add_space(64.0);
+                    } else {
+                        let shown = if condition.or { "OR" } else { "AND" };
+                        widgets::combo(
+                            ui,
+                            p,
+                            egui::Id::new(("cond_join", having, index)),
+                            shown,
+                            60.0,
+                            |ui| {
+                                ui.selectable_value(&mut condition.or, false, "AND");
+                                ui.selectable_value(&mut condition.or, true, "OR");
+                            },
+                        );
+                    }
+                    if having {
+                        aggregate_combo(
+                            ui,
+                            p,
+                            ("cond_aggregate", index),
+                            &mut condition.aggregate,
+                            "—",
+                        );
+                    }
+                    field_combo(
+                        ui,
+                        p,
+                        ("cond_field", having, index),
+                        b,
+                        &mut condition.field,
+                        having,
+                        200.0,
+                    );
+                    widgets::combo(
+                        ui,
+                        p,
+                        egui::Id::new(("cond_op", having, index)),
+                        condition.operator.sql(),
+                        100.0,
+                        |ui| {
+                            for operator in Operator::ALL {
+                                ui.selectable_value(
+                                    &mut condition.operator,
+                                    operator,
+                                    operator.sql(),
+                                );
+                            }
+                        },
+                    );
+                    if condition.operator.takes_value() {
+                        let hint = match condition.operator {
+                            Operator::In | Operator::NotIn => "1, 2, 3",
+                            Operator::Between => "1 AND 10",
+                            Operator::Like | Operator::NotLike => "'%text%'",
+                            _ => l(
+                                "wartość albo kolumna, np. 5, 'tekst'",
+                                "value or column, e.g. 5, 'text'",
+                            ),
+                        };
+                        ui.add(
+                            widgets::field(p, &mut condition.value)
+                                .desired_width(180.0)
+                                .hint_text(hint),
+                        );
+                    }
+                    if let Some(asked) = row_tools(ui, p, en, index, len) {
+                        tool = Some((index, asked));
+                    }
+                });
+            }
+            if let Some((index, asked)) = tool {
+                apply_tool(&mut list, index, Some(asked));
+            }
+            if add_button(ui, p, l("Dodaj warunek", "Add a condition"), true) {
+                let field = if having {
+                    Field {
+                        source: 0,
+                        column: "*".into(),
+                    }
+                } else {
+                    b.first_field()
+                };
+                list.push(Condition {
+                    or: false,
+                    field,
+                    aggregate: having.then_some(Aggregate::Count),
+                    operator: if having {
+                        Operator::Greater
+                    } else {
+                        Operator::Equal
+                    },
+                    value: String::new(),
+                });
+            }
+            widgets::help(
+                ui,
+                p,
+                l(
+                    "Wartość to SQL: liczba, tekst w apostrofach albo inna kolumna (alias.kolumna).",
+                    "A value is SQL: a number, text in quotes or another column (alias.column).",
+                ),
+            );
+            if having {
+                b.query.having = list;
+            } else {
+                b.query.conditions = list;
+            }
+        }
+        BuilderPage::Group => {
+            let len = b.query.group_by.len();
+            let mut tool = None;
+            for index in 0..len {
+                let mut field = b.query.group_by[index].clone();
+                ui.horizontal(|ui| {
+                    field_combo(ui, p, ("group", index), b, &mut field, false, 260.0);
+                    if let Some(asked) = row_tools(ui, p, en, index, len) {
+                        tool = Some((index, asked));
+                    }
+                });
+                b.query.group_by[index] = field;
+            }
+            if let Some((index, asked)) = tool {
+                apply_tool(&mut b.query.group_by, index, Some(asked));
+            }
+            ui.horizontal(|ui| {
+                if add_button(ui, p, l("Dodaj kolumnę", "Add a column"), true) {
+                    let field = b.first_field();
+                    b.query.group_by.push(field);
+                }
+                // What a summary needs: the other columns of the result.
+                if Btn::quiet(l(
+                    "Z kolumn wyniku bez podsumowania",
+                    "From the result columns without a summary",
+                ))
+                .small()
+                .show(ui, p)
+                .clicked()
+                {
+                    b.query.group_by = b
+                        .query
+                        .outputs
+                        .iter()
+                        .filter(|o| o.aggregate.is_none() && o.field.column != "*")
+                        .map(|o| o.field.clone())
+                        .collect();
+                }
+            });
+        }
+        BuilderPage::Order => {
+            let len = b.query.order_by.len();
+            let mut tool = None;
+            for index in 0..len {
+                let mut term = b.query.order_by[index].clone();
+                ui.horizontal(|ui| {
+                    aggregate_combo(ui, p, ("order_aggregate", index), &mut term.aggregate, "—");
+                    field_combo(
+                        ui,
+                        p,
+                        ("order_field", index),
+                        b,
+                        &mut term.field,
+                        term.aggregate.is_some(),
+                        260.0,
+                    );
+                    let shown = if term.descending { "DESC" } else { "ASC" };
+                    widgets::combo(
+                        ui,
+                        p,
+                        egui::Id::new(("order_way", index)),
+                        shown,
+                        80.0,
+                        |ui| {
+                            ui.selectable_value(&mut term.descending, false, "ASC");
+                            ui.selectable_value(&mut term.descending, true, "DESC");
+                        },
+                    );
+                    if let Some(asked) = row_tools(ui, p, en, index, len) {
+                        tool = Some((index, asked));
+                    }
+                });
+                b.query.order_by[index] = term;
+            }
+            if let Some((index, asked)) = tool {
+                apply_tool(&mut b.query.order_by, index, Some(asked));
+            }
+            if add_button(ui, p, l("Dodaj sortowanie", "Add an order"), true) {
+                let field = b.first_field();
+                b.query.order_by.push(OrderTerm {
+                    field,
+                    aggregate: None,
+                    descending: false,
+                });
+            }
+        }
+        BuilderPage::Limit => {
+            widgets::form_row(ui, p, 160.0, l("Najwięcej wierszy", "Most rows"), |ui| {
+                ui.add(
+                    widgets::field(p, &mut b.query.limit)
+                        .desired_width(120.0)
+                        .hint_text(l("bez limitu", "no limit")),
+                );
+            });
+            widgets::form_row(ui, p, 160.0, l("Pomiń wiersze", "Skip rows"), |ui| {
+                ui.add(
+                    widgets::field(p, &mut b.query.offset)
+                        .desired_width(120.0)
+                        .hint_text("0"),
+                );
+            });
+        }
+        BuilderPage::Result => {}
     }
 }

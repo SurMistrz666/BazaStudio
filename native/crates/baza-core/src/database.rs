@@ -71,6 +71,7 @@ impl Database {
     }
     /// What reading a page of a container looks like as text.
     pub fn page_text(&self, page: &PageRequest) -> Result<String> {
+        self.typed_condition_allowed(page)?;
         self.session.page_text(page)
     }
     /// Read one page of a container.
@@ -79,7 +80,19 @@ impl Database {
         page: &PageRequest,
         cancel: CancellationToken,
     ) -> Result<QueryResult> {
+        self.typed_condition_allowed(page)?;
         self.session.read_page(page, cancel).await
+    }
+    /// A driver that does not write typed conditions or further orders would
+    /// show the rows unfiltered or in another order, as if they were asked.
+    fn typed_condition_allowed(&self, page: &PageRequest) -> Result<()> {
+        let capabilities = self.capabilities();
+        anyhow::ensure!(
+            (page.condition.is_none() || capabilities.condition)
+                && (page.then_by.is_empty() || capabilities.sort_many),
+            "operation_unsupported"
+        );
+        Ok(())
     }
     /// What a change of one record looks like as text, for the history.
     pub fn change_text(&self, change: &RowChange) -> Result<String> {

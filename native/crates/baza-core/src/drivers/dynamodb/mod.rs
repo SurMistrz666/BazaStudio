@@ -73,8 +73,11 @@ pub static SPEC: EngineSpec = EngineSpec {
         // PartiQL in the SQL editor; tables directly under the connection.
         schemas: false,
         filter: true,
+        // Pages are read through the API, not as PartiQL.
+        condition: false,
         // Within limits: see `browse`.
         sort: true,
+        sort_many: false,
         edit_cells: true,
         insert_rows: true,
         delete_rows: true,

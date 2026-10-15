@@ -5,13 +5,20 @@
 use super::shortcuts::take_mod;
 use super::*;
 use crate::widgets::Btn;
-use baza_core::ddl::{self, DdlFlavor, FieldDraft};
+use baza_core::ddl::{self, DdlFlavor, FieldDraft, mysql::TableExtras};
 use egui_extras::{Column, TableBuilder};
 
 /// What the designer shows under its toolbar.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum DesignPage {
     Fields,
+    // The parts of a MySQL or MariaDB table beyond its columns.
+    Indexes,
+    ForeignKeys,
+    Checks,
+    Triggers,
+    Options,
+    Partitions,
     Sql,
 }
 
@@ -26,6 +33,14 @@ pub(super) struct DesignTab {
     pub original: Vec<FieldDraft>,
     pub selected: usize,
     pub page: DesignPage,
+    /// Indexes, constraints, triggers, options and partitions, as edited
+    /// and as the database has them (MySQL and MariaDB).
+    pub extras: TableExtras,
+    pub original_extras: TableExtras,
+    /// What the server offers for the options, and columns of other tables.
+    pub catalog: super::design_extras::Catalog,
+    /// The item chosen on a page of the parts beyond the columns.
+    pub item: usize,
     pub loading: bool,
     pub saving: bool,
     pub request: Uuid,
@@ -70,6 +85,8 @@ fn type_choices(flavor: DdlFlavor) -> &'static [&'static str] {
             "longblob",
             "binary",
             "varbinary",
+            "enum",
+            "set",
         ],
         DdlFlavor::Postgres => &[
             "integer",
@@ -123,6 +140,12 @@ fn type_choices(flavor: DdlFlavor) -> &'static [&'static str] {
     }
 }
 
+/// An ENUM or a SET: its values are chosen from a list.
+fn is_choice(data_type: &str) -> bool {
+    let name = data_type.trim();
+    name.eq_ignore_ascii_case("enum") || name.eq_ignore_ascii_case("set")
+}
+
 /// The first field of a new table: a numbered key.
 fn key_field(flavor: DdlFlavor) -> FieldDraft {
     FieldDraft {
@@ -166,6 +189,7 @@ impl StudioApp {
             return;
         };
         let flavor = flavor_of(db.engine());
+        let request = Uuid::new_v4();
         self.designs.push(DesignTab {
             id: Uuid::new_v4(),
             connection,
@@ -179,12 +203,19 @@ impl StudioApp {
             original: Vec::new(),
             selected: 0,
             page: DesignPage::Fields,
+            extras: TableExtras::default(),
+            original_extras: TableExtras::default(),
+            catalog: Default::default(),
+            item: 0,
             loading: false,
             saving: false,
-            request: Uuid::new_v4(),
+            request,
         });
         self.design_active = self.designs.len() - 1;
         self.section = Section::Design;
+        if flavor == DdlFlavor::MySql {
+            self.load_design_extras(connection, None, request);
+        }
     }
 
     /// "Projektuj tabelę": the fields of an existing table in the designer.
@@ -209,6 +240,10 @@ impl StudioApp {
             original: Vec::new(),
             selected: 0,
             page: DesignPage::Fields,
+            extras: TableExtras::default(),
+            original_extras: TableExtras::default(),
+            catalog: Default::default(),
+            item: 0,
             loading: true,
             saving: false,
             request,
@@ -226,6 +261,9 @@ impl StudioApp {
             return;
         };
         let mysql = flavor_of(db.engine()) == DdlFlavor::MySql;
+        if mysql {
+            self.load_design_extras(connection, Some(table.clone()), request);
+        }
         let tx = self.tx.clone();
         let ctx = self.ctx.clone();
         self.track(async move {
@@ -303,16 +341,26 @@ impl StudioApp {
         let flavor = flavor_of(db.engine());
         let mut table = design.table.clone();
         table.name = table.name.trim().to_owned();
-        if design.new {
-            ddl::create_table(flavor, db.dialect(), &table, &design.fields)
-        } else {
-            ddl::alter_table(
+        match (flavor, design.new) {
+            (DdlFlavor::MySql, true) => {
+                ddl::mysql::create(db.dialect(), &table, &design.fields, &design.extras)
+            }
+            (DdlFlavor::MySql, false) => ddl::mysql::alter(
+                db.dialect(),
+                &table,
+                &design.original,
+                &design.fields,
+                &design.original_extras,
+                &design.extras,
+            ),
+            (_, true) => ddl::create_table(flavor, db.dialect(), &table, &design.fields),
+            (_, false) => ddl::alter_table(
                 flavor,
                 db.dialect(),
                 &table,
                 &design.original,
                 &design.fields,
-            )
+            ),
         }
     }
 
@@ -451,6 +499,13 @@ impl StudioApp {
             .get(&self.designs[index].connection)
             .map_or(DdlFlavor::Generic, |db| flavor_of(db.engine()));
         let preview = self.design_statements(&self.designs[index]);
+        let tables = self
+            .tables
+            .get(&self.designs[index].connection)
+            .cloned()
+            .unwrap_or_default();
+        let mut extras_action = None;
+        let mut open_values = None;
         let design = &mut self.designs[index];
         let busy = design.loading || design.saving;
         let (mut save, mut add, mut insert, mut remove, mut key) =
@@ -532,10 +587,19 @@ impl StudioApp {
                 ui.horizontal(|ui| {
                     ui.set_height(p.control_height() + 6.0);
                     ui.spacing_mut().item_spacing.x = 0.0;
-                    for (page, label) in [
-                        (DesignPage::Fields, l("Pola", "Fields")),
-                        (DesignPage::Sql, l("Podgląd SQL", "SQL preview")),
-                    ] {
+                    let mut pages = vec![(DesignPage::Fields, l("Pola", "Fields"))];
+                    if flavor == DdlFlavor::MySql {
+                        pages.extend([
+                            (DesignPage::Indexes, l("Indeksy", "Indexes")),
+                            (DesignPage::ForeignKeys, l("Klucze obce", "Foreign keys")),
+                            (DesignPage::Checks, l("Sprawdzenia", "Checks")),
+                            (DesignPage::Triggers, l("Wyzwalacze", "Triggers")),
+                            (DesignPage::Options, l("Opcje", "Options")),
+                            (DesignPage::Partitions, l("Partycje", "Partitions")),
+                        ]);
+                    }
+                    pages.push((DesignPage::Sql, l("Podgląd SQL", "SQL preview")));
+                    for (page, label) in pages {
                         if widgets::tab(
                             ui,
                             &p,
@@ -547,8 +611,10 @@ impl StudioApp {
                             p.control_height() + 6.0,
                         )
                         .clicked()
+                            && design.page != page
                         {
                             design.page = page;
+                            design.item = 0;
                         }
                     }
                     widgets::right(ui, |ui| {
@@ -605,6 +671,13 @@ impl StudioApp {
                 });
         } else if design.loading && design.fields.is_empty() {
             super::sql_view::hint(ui, &p, l("Wczytywanie pól…", "Loading the fields…"));
+        } else if design.page != DesignPage::Fields {
+            egui::ScrollArea::vertical()
+                .id_salt(("design_extras", design.id))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    extras_action = super::design_extras::extras_page(ui, &p, en, design, &tables);
+                });
         } else {
             // The default value and switches of the selected field, below.
             egui::Panel::bottom(egui::Id::new(("design_detail", design.id)))
@@ -649,6 +722,18 @@ impl StudioApp {
                                             &mut field.unsigned,
                                             l("Bez znaku (unsigned)", "Unsigned"),
                                         );
+                                        if is_choice(&field.data_type)
+                                            && Btn::new(&format!(
+                                                "{} ({})…",
+                                                l("Wartości", "Values"),
+                                                field.values.len()
+                                            ))
+                                            .small()
+                                            .show(ui, &p)
+                                            .clicked()
+                                        {
+                                            open_values = Some(at);
+                                        }
                                     }
                                 });
                                 ui.end_row();
@@ -767,7 +852,28 @@ impl StudioApp {
                                     });
                             });
                         });
-                        row.col(|ui| touched |= edit(ui, &mut field.length, "").has_focus());
+                        row.col(|ui| {
+                            // The values of an ENUM or a SET are edited in a
+                            // window of their own.
+                            if flavor == DdlFlavor::MySql && is_choice(&field.data_type) {
+                                let text = if field.values.is_empty() {
+                                    l("wartości…", "values…").to_owned()
+                                } else {
+                                    field.values.join(", ")
+                                };
+                                let label = ui.add(
+                                    egui::Label::new(egui::RichText::new(text).color(p.keyword))
+                                        .truncate()
+                                        .sense(egui::Sense::click()),
+                                );
+                                if label.clicked() {
+                                    open_values = Some(i);
+                                    touched = true;
+                                }
+                            } else {
+                                touched |= edit(ui, &mut field.length, "").has_focus();
+                            }
+                        });
                         row.col(|ui| touched |= edit(ui, &mut field.scale, "").has_focus());
                         row.col(|ui| {
                             ui.add_space(24.0);
@@ -859,7 +965,20 @@ impl StudioApp {
             design.fields.swap(at, at + 1);
             design.selected = at + 1;
         }
-        let (connection, table) = (design.connection, design.table.clone());
+        let (connection, table, design_id) = (design.connection, design.table.clone(), design.id);
+        if let Some(field) = open_values
+            && let Some(values) = design.fields.get(field).map(|f| f.values.clone())
+        {
+            self.design_values = Some(super::design_extras::ValuesEditor {
+                design: design_id,
+                field,
+                values,
+                new: String::new(),
+            });
+        }
+        if let Some(super::design_extras::ExtrasAction::RefColumns(target)) = extras_action {
+            self.load_ref_columns(design_id, connection, target);
+        }
         if open_data {
             self.open_table(connection, table);
         }

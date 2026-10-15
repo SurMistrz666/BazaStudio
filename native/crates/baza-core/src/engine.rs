@@ -539,8 +539,18 @@ pub struct Capabilities {
     pub schemas: bool,
     /// "Dane tabeli" can filter by a column.
     pub filter: bool,
+    /// "Dane tabeli" can filter by a condition the user types in SQL. The
+    /// driver writes [`PageRequest::condition`] into its `WHERE`, checked by
+    /// [`crate::sql::typed_condition`].
+    ///
+    /// [`PageRequest::condition`]: crate::drivers::PageRequest::condition
+    pub condition: bool,
     /// "Dane tabeli" can order by a column.
     pub sort: bool,
+    /// "Dane tabeli" can order by several columns: [`PageRequest::then_by`].
+    ///
+    /// [`PageRequest::then_by`]: crate::drivers::PageRequest::then_by
+    pub sort_many: bool,
     /// One cell of a record with a key can be changed in the grid.
     pub edit_cells: bool,
     /// A record can be added in the grid.
@@ -565,7 +575,9 @@ impl Capabilities {
         browse: BrowseModel::Tables,
         schemas: true,
         filter: true,
+        condition: true,
         sort: true,
+        sort_many: true,
         edit_cells: true,
         insert_rows: true,
         delete_rows: true,
@@ -581,7 +593,9 @@ impl Capabilities {
         browse: BrowseModel::Tables,
         schemas: false,
         filter: false,
+        condition: false,
         sort: false,
+        sort_many: false,
         edit_cells: false,
         insert_rows: false,
         delete_rows: false,
@@ -865,6 +879,13 @@ mod tests {
                 assert_eq!(
                     Engine::of_product(product.id).map(|found| found.0),
                     Some(engine)
+                );
+                // A typed condition is SQL, checked by the rules of the dialect.
+                let capabilities = spec.capabilities_of(product);
+                assert!(
+                    !capabilities.condition || capabilities.language == QueryLanguage::Sql,
+                    "{}",
+                    product.id
                 );
             }
             // Something of every family can be picked for a new connection.

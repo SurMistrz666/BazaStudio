@@ -729,11 +729,19 @@ fn page_statement(page: &PageRequest, described: Option<&Described>) -> Result<S
     let (Some(described), Some(paging)) = (described, statement.rfind("\nOFFSET ")) else {
         return Ok(statement);
     };
-    let key = |skip: Option<&String>| {
+    // A column may stand in ORDER BY once: the key breaks the ties of the
+    // columns ordered by, without them.
+    let sorted = |name: &String| {
+        page.order_by
+            .iter()
+            .chain(&page.then_by)
+            .any(|(column, _)| column == name)
+    };
+    let key = || {
         described
             .keys
             .iter()
-            .filter(|name| Some(*name) != skip)
+            .filter(|name| !sorted(name))
             .map(|name| quote_identifier(&DIALECT, name))
             .collect::<Result<Vec<_>>>()
             .map(|names| names.join(", "))
@@ -748,12 +756,12 @@ fn page_statement(page: &PageRequest, described: Option<&Described>) -> Result<S
             let order = if described.keys.is_empty() {
                 "(SELECT NULL)".to_owned()
             } else {
-                key(None)?
+                key()?
             };
             format!("{head}\nORDER BY {order}{tail}")
         }
-        Some((column, _)) => {
-            let ties = key(Some(column))?;
+        Some(_) => {
+            let ties = key()?;
             if ties.is_empty() {
                 statement
             } else {
@@ -1296,6 +1304,16 @@ mod tests {
         assert_eq!(
             page_statement(&by_key, Some(&composite)).unwrap(),
             "SELECT *\nFROM [dbo].[orders]\nORDER BY [order id] ASC, [line]]no]\nOFFSET 0 ROWS FETCH NEXT 500 ROWS ONLY"
+        );
+        // Several columns: a key column ordered by already is not repeated.
+        let by_two = PageRequest {
+            order_by: Some(("placed".into(), true)),
+            then_by: vec![("line]no".into(), false)],
+            ..first.clone()
+        };
+        assert_eq!(
+            page_statement(&by_two, Some(&composite)).unwrap(),
+            "SELECT *\nFROM [dbo].[orders]\nORDER BY [placed] DESC, [line]]no] ASC, [order id]\nOFFSET 0 ROWS FETCH NEXT 500 ROWS ONLY"
         );
         assert_eq!(
             page_statement(

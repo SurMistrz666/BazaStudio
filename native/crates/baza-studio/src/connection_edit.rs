@@ -255,6 +255,23 @@ pub fn settle_server_key(before: &ProfileSet, opened: &str, draft: &mut Connecti
         ssh.fingerprint = server_key_to_save(saved, opened, ssh);
     }
 }
+/// Name for a copy of the connection `name` that no saved connection has:
+/// names are unique regardless of letter case.
+pub fn copy_name(before: &ProfileSet, name: &str, copy: &str) -> String {
+    (1..)
+        .map(|n| match n {
+            1 => format!("{name} ({copy})"),
+            n => format!("{name} ({copy} {n})"),
+        })
+        .find(|candidate| {
+            let candidate = candidate.to_lowercase();
+            before
+                .connections
+                .iter()
+                .all(|p| p.name.to_lowercase() != candidate)
+        })
+        .expect("a free name")
+}
 /// Write a draft over its saved profile, or add it. `opened_key` is the
 /// server key fingerprint the editor was opened with ([`EditorState::opened_key`]);
 /// it decides which key is stored, see [`server_key_to_save`].
@@ -599,6 +616,20 @@ mod tests {
         state.open(profile);
         assert!(!state.matches(old));
         assert!(state.matches(state.id));
+    }
+    #[test]
+    fn a_copy_gets_the_first_free_name() {
+        let named = |name: &str| ConnectionProfile {
+            name: name.into(),
+            ..ConnectionProfile::default()
+        };
+        let mut set = ProfileSet::default();
+        set.connections.push(named("Prod"));
+        assert_eq!(copy_name(&set, "Prod", "kopia"), "Prod (kopia)");
+        // Names are unique regardless of letter case.
+        set.connections.push(named("PROD (Kopia)"));
+        set.connections.push(named("Prod (kopia 2)"));
+        assert_eq!(copy_name(&set, "Prod", "kopia"), "Prod (kopia 3)");
     }
     // Well-formed SHA256 fingerprints: 43 characters of unpadded base64.
     const LEARNED: &str = "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA";

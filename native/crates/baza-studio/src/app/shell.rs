@@ -101,11 +101,13 @@ impl StudioApp {
         self.connection_window(&ctx);
         self.preferences_window(&ctx);
         self.cell_window(&ctx);
+        self.value_window(&ctx);
         self.confirmations(&ctx);
         self.objects_windows(&ctx);
         self.shortcut_windows(&ctx);
         self.fill_window(&ctx);
         self.design_confirm_window(&ctx);
+        self.values_window(&ctx);
         self.insert_window(&ctx);
         self.lock_settings_window(&ctx);
         self.distribution_window(&ctx);
@@ -131,6 +133,28 @@ impl StudioApp {
             .iter()
             .find(|p| p.id == id)
             .cloned();
+    }
+
+    /// Open the editor on a copy of a connection: everything but the id, the
+    /// name and the SSH server key, in the same group. Nothing is stored
+    /// until the copy is saved.
+    pub(super) fn duplicate_connection(&mut self, id: Uuid) {
+        let Some(source) = self.profiles.connections.iter().find(|p| p.id == id) else {
+            return;
+        };
+        let mut copy = source.clone();
+        copy.id = Uuid::new_v4();
+        copy.name =
+            connection_edit::copy_name(&self.profiles, &source.name, self.tr("kopia", "copy"));
+        // The copy learns the key on its first connection: once edited, it
+        // may point at another SSH server.
+        self.copy_key_notice = copy
+            .ssh
+            .as_mut()
+            .is_some_and(|ssh| !std::mem::take(&mut ssh.fingerprint).is_empty());
+        self.connection_form_group =
+            Some((copy.id, self.group_snapshot.memberships.get(&id).copied()));
+        self.connection_dialog = Some(copy);
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {

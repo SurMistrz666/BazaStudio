@@ -1448,6 +1448,24 @@ mod tests {
             page_of(&by_key, Some(&composite))
                 .contains("ORDER BY \"order id\" ASC, \"line\"\"no\"\n")
         );
+        // A typed condition goes in parentheses, and only a checked one.
+        let typed = PageRequest {
+            condition: Some("\"ID\" = 19 OR note IS NULL".into()),
+            ..first.clone()
+        };
+        assert!(
+            page_of(&typed, Some(&single))
+                .contains("\nWHERE (\"ID\" = 19 OR note IS NULL)\nORDER BY \"ID\"\n")
+        );
+        let refused = PageRequest {
+            condition: Some("1 = 1 -- x".into()),
+            ..first.clone()
+        };
+        let columns = Columns {
+            types: None,
+            booleans: false,
+        };
+        assert!(script::page_statement(&refused, &columns, Order::Unknown).is_err());
         // A table without a key, and a view.
         let keyless = described(&[], &[("A", "NUMBER")]);
         assert!(page_of(&first, Some(&keyless)).contains("\nORDER BY ROWID\n"));

@@ -1192,20 +1192,31 @@ impl Session for ClickHouseSession {
         );
         let described = self.known(&page.container);
         let mut text = format!("SELECT *\nFROM {}", qualified(&page.container)?);
-        if !page.filters.is_empty() {
-            let conditions = page
-                .filters
-                .iter()
-                .map(|filter| Self::condition(described.as_deref(), filter))
-                .collect::<Result<Vec<_>>>()?;
+        let mut conditions = page
+            .filters
+            .iter()
+            .map(|filter| Self::condition(described.as_deref(), filter))
+            .collect::<Result<Vec<_>>>()?;
+        if let Some(typed) = &page.condition {
+            conditions.push(crate::sql::typed_condition(&DIALECT, typed)?);
+        }
+        if !conditions.is_empty() {
             text.push_str(&format!("\nWHERE {}", conditions.join(" AND ")));
         }
         match &page.order_by {
-            Some((column, descending)) => text.push_str(&format!(
-                "\nORDER BY {} {}",
-                quote_name(column)?,
-                if *descending { "DESC" } else { "ASC" }
-            )),
+            Some(first) => {
+                let terms = std::iter::once(first)
+                    .chain(&page.then_by)
+                    .map(|(column, descending)| {
+                        Ok(format!(
+                            "{} {}",
+                            quote_name(column)?,
+                            if *descending { "DESC" } else { "ASC" }
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                text.push_str(&format!("\nORDER BY {}", terms.join(", ")));
+            }
             // Without an order the server returns rows as its threads find
             // them, and two pages would overlap. The key of the table is
             // the order its data is stored in, so it costs next to nothing.

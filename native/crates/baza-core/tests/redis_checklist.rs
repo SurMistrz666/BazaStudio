@@ -189,7 +189,9 @@ async fn page_of(
     let request = PageRequest {
         container: table(container),
         filters,
+        condition: None,
         order_by: order.map(|(name, descending)| (name.to_owned(), descending)),
+        then_by: Vec::new(),
         limit,
         offset,
     };

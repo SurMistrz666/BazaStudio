@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod app;
 mod connection_edit;
+mod cstruct;
 mod editor_text;
 mod messages;
 mod navigator;

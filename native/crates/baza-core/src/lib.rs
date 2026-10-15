@@ -3,6 +3,7 @@ pub mod database;
 pub mod ddl;
 pub mod drivers;
 pub mod engine;
+pub mod format;
 pub mod groups;
 pub mod local_lock;
 pub mod model;
@@ -11,6 +12,7 @@ pub mod sql;
 pub mod ssh;
 pub mod updater;
 pub mod vault;
+pub mod visual;
 pub use engine::{
     Badge, BrowseModel, Capabilities, Dialect, EngineSpec, Group, OptionField, OptionKind,
     ProductSpec, QueryLanguage,

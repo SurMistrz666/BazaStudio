@@ -42,14 +42,16 @@ impl StudioApp {
                 let name = match tab.kind {
                     TabKind::Table => format!("{}: {}", l("Tabela", "Table"), tab.title),
                     TabKind::Query => format!("{}: {}", l("Zapytanie", "Query"), tab.title),
-                    TabKind::Builder => match &self.builder {
-                        Some(builder) => format!(
-                            "{}: {}",
-                            l("Kreator zapytań", "Query builder"),
-                            builder.table.name
-                        ),
-                        None => l("Kreator zapytań", "Query builder").to_owned(),
-                    },
+                    TabKind::Builder => {
+                        match self.builder.as_ref().and_then(|b| b.query.sources.first()) {
+                            Some(source) => format!(
+                                "{}: {}",
+                                l("Kreator zapytań", "Query builder"),
+                                source.alias
+                            ),
+                            None => l("Kreator zapytań", "Query builder").to_owned(),
+                        }
+                    }
                 };
                 (i, tab.id, format!("{name} · {rows} {}", row_word(rows, en)))
             })

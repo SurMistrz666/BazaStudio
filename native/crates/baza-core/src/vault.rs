@@ -27,6 +27,7 @@ const NAMED: &[(&str, &str)] = &[
     ("local-lock", "native-local-lock.bzvault"),
     ("saved-queries", "native-saved-queries.bzvault"),
     ("connection-groups", "native-connection-groups.bzvault"),
+    ("blob-layouts", "native-blob-layouts.bzvault"),
 ];
 /// Records written by releases that still used online activation. Nothing
 /// reads them any more, so they are removed when the vault is opened and they

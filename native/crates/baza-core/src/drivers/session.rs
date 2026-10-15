@@ -14,8 +14,19 @@ pub struct PageRequest {
     pub container: TableRef,
     /// All of them must hold.
     pub filters: Vec<Filter>,
+    /// A condition the user typed in SQL, which must hold as well. It is
+    /// written into SQL only through [`crate::sql::typed_condition`], and only
+    /// by an engine with [`Capabilities::condition`].
+    ///
+    /// [`Capabilities::condition`]: crate::engine::Capabilities::condition
+    pub condition: Option<String>,
     /// Column and whether the order is descending.
     pub order_by: Option<(String, bool)>,
+    /// Further columns to order by, after `order_by`, only for an engine with
+    /// [`Capabilities::sort_many`].
+    ///
+    /// [`Capabilities::sort_many`]: crate::engine::Capabilities::sort_many
+    pub then_by: Vec<(String, bool)>,
     /// Number of records, between 1 and 20 000.
     pub limit: u32,
     /// Records to skip.
@@ -27,7 +38,9 @@ impl PageRequest {
         Self {
             container,
             filters: Vec::new(),
+            condition: None,
             order_by: None,
+            then_by: Vec::new(),
             limit: 500,
             offset: 0,
         }

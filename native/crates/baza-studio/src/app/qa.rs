@@ -54,7 +54,8 @@
 //!   - `m:x,y` move the pointer without a click, for hover states;
 //!   - `v:x,y,dy` turn the wheel over that point: a positive `dy` moves the
 //!     view that many points further down a list or a form, a negative one up;
-//!   - `t:text` typed text (everything after the colon, spaces included);
+//!   - `t:text` typed text (everything after the colon, spaces included;
+//!     `\x3b` stands for `;`, which otherwise ends the step);
 //!   - `k:<key>` a key: `enter`, `esc`, `tab`, `f2`, `up`, `down`, `left`,
 //!     `right`, `backspace`, `delete`, `space`, `home`, `end`, a letter or a
 //!     digit, each optionally after `cmd+`, `ctrl+`, `shift+` or `alt+`
@@ -179,8 +180,14 @@ impl Step {
                     distance.trim().parse().ok()?,
                 )
             }
-            "t" => Self::Text(value.to_owned()),
-            "p" => Self::Paste(value.replace("\\t", "\t").replace("\\n", "\n")),
+            // `;` ends a step, so a text writes it as `\x3b`.
+            "t" => Self::Text(value.replace("\\x3b", ";")),
+            "p" => Self::Paste(
+                value
+                    .replace("\\t", "\t")
+                    .replace("\\n", "\n")
+                    .replace("\\x3b", ";"),
+            ),
             "k" => {
                 let mut modifiers = egui::Modifiers::NONE;
                 let mut parts = value.trim().split('+').collect::<Vec<_>>();
@@ -518,15 +525,34 @@ impl StudioApp {
                 if let Some(table) = table {
                     self.open_builder(connection, table);
                     if let Some(builder) = self.builder.as_mut() {
-                        builder.selected = vec!["status".into()];
-                        builder.aggregate = "COUNT".into();
-                        builder.group_column = "status".into();
+                        use baza_core::visual::{Aggregate, Field, Output};
+                        let status = Field {
+                            source: 0,
+                            column: "status".into(),
+                        };
+                        builder.query.outputs = vec![
+                            Output {
+                                field: status.clone(),
+                                aggregate: None,
+                                alias: String::new(),
+                            },
+                            Output {
+                                field: Field {
+                                    source: 0,
+                                    column: "*".into(),
+                                },
+                                aggregate: Some(Aggregate::Count),
+                                alias: "orders".into(),
+                            },
+                        ];
+                        builder.query.group_by = vec![status];
+                        builder.page = super::builder_view::BuilderPage::Result;
                         let tab = builder.tab;
                         let dialect = self
                             .databases
                             .get(&connection)
                             .map_or(Dialect::ANSI, |db| *db.dialect());
-                        if let Ok(sql) = super::builder_view::builder_sql(builder, &dialect) {
+                        if let Ok(sql) = builder.query.sql(&dialect) {
                             if let Some(target) = self.tabs.iter_mut().find(|t| t.id == tab) {
                                 target.sql = sql;
                             }
@@ -675,6 +701,7 @@ impl StudioApp {
             "table-filter" => {
                 if let Some(index) = table_tab {
                     let tab = &mut self.tabs[index];
+                    tab.filter_sql = false;
                     tab.filter_column = "status".into();
                     tab.filter_value = "pend".into();
                     self.browse(index);

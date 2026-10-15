@@ -97,6 +97,11 @@ pub(super) const GROUPS: &[(&str, &str, &[Shortcut])] = &[
                 "Upper, lower case of the selection",
             ),
             key(
+                "Mod+Shift+F",
+                "Formatuj SQL: zaznaczenie albo całość",
+                "Format SQL: the selection or all of it",
+            ),
+            key(
                 "Mod+F, F3, Shift+F3",
                 "Szukaj, następny, poprzedni",
                 "Find, next, previous",

@@ -1,6 +1,9 @@
 //! The statements of the table designer: `CREATE TABLE` for a new table and
 //! the `ALTER TABLE` statements that turn the columns a table has into the
-//! ones the designer shows. Each SQL family writes them its own way.
+//! ones the designer shows. Each SQL family writes them its own way. The
+//! parts of a MySQL or MariaDB table beyond its columns are in [`mysql`].
+pub mod mysql;
+
 use crate::engine::Dialect;
 use crate::model::{Cell, ColumnInfo, TableRef};
 use crate::sql::{literal, qualified, quote_identifier};
@@ -32,6 +35,8 @@ pub struct FieldDraft {
     pub comment: String,
     pub auto_increment: bool,
     pub unsigned: bool,
+    /// The values of an `enum` or a `set`, in their order.
+    pub values: Vec<String>,
     /// The name the column has in the database; `None` for a new column.
     pub original: Option<String>,
 }
@@ -40,6 +45,15 @@ impl FieldDraft {
     /// A column the database already has, as its metadata describes it.
     pub fn from_column(column: &ColumnInfo) -> Self {
         let (data_type, length, scale, unsigned) = split_type(&column.data_type);
+        // The values of an `enum` or a `set` are not its length.
+        let values = crate::sql::choices(&column.data_type)
+            .map(|(_, values)| values)
+            .unwrap_or_default();
+        let (data_type, length, scale) = if values.is_empty() {
+            (data_type, length, scale)
+        } else {
+            (data_type.to_ascii_lowercase(), String::new(), String::new())
+        };
         Self {
             name: column.name.clone(),
             data_type,
@@ -51,6 +65,7 @@ impl FieldDraft {
             comment: String::new(),
             auto_increment: false,
             unsigned,
+            values,
             original: Some(column.name.clone()),
         }
     }
@@ -86,6 +101,28 @@ pub fn split_type(text: &str) -> (String, String, String, bool) {
 /// underscores make a type name, digits (or `MAX`) a length.
 pub fn type_text(flavor: DdlFlavor, field: &FieldDraft) -> Result<String> {
     let name = field.data_type.trim();
+    // `enum('a','b')` and `set(…)`: the values quoted as MySQL reads them,
+    // where a backslash escapes.
+    if flavor == DdlFlavor::MySql
+        && (name.eq_ignore_ascii_case("enum") || name.eq_ignore_ascii_case("set"))
+    {
+        ensure!(
+            !field.values.is_empty()
+                && field.values.len() <= 65535
+                && field.values.iter().all(|value| !value.contains('\0')),
+            "column_values_invalid"
+        );
+        let values = field
+            .values
+            .iter()
+            .map(|value| format!("'{}'", value.replace('\\', "\\\\").replace('\'', "''")))
+            .collect::<Vec<_>>();
+        return Ok(format!(
+            "{}({})",
+            name.to_ascii_lowercase(),
+            values.join(",")
+        ));
+    }
     ensure!(
         !name.is_empty()
             && name.len() <= 64
@@ -136,12 +173,7 @@ fn default_text(field: &FieldDraft) -> Result<Option<String>> {
 }
 
 /// The definition of a column after its name.
-fn definition(
-    flavor: DdlFlavor,
-    dialect: &Dialect,
-    field: &FieldDraft,
-    inline_key: bool,
-) -> Result<String> {
+fn definition(flavor: DdlFlavor, field: &FieldDraft, inline_key: bool) -> Result<String> {
     let mut text = type_text(flavor, field)?;
     if inline_key {
         // SQLite numbers rows itself only for `INTEGER PRIMARY KEY`.
@@ -170,13 +202,24 @@ fn definition(
         }
         if !field.comment.trim().is_empty() {
             text.push_str(" COMMENT ");
-            text.push_str(&literal(
-                dialect,
-                &Cell::Text(field.comment.trim().to_owned()),
-            )?);
+            text.push_str(&mysql_comment(field.comment.trim())?);
         }
     }
     Ok(text)
+}
+
+/// A comment of MySQL and MariaDB. Their grammar takes only a quoted string
+/// there, not the `_utf8mb4 0x…` literal the dialect writes elsewhere; a
+/// backslash escapes in it, as the servers read strings by default.
+pub(crate) fn mysql_comment(text: &str) -> Result<String> {
+    ensure!(
+        text.len() <= 2048 && !text.contains('\0'),
+        "comment_invalid"
+    );
+    Ok(format!(
+        "'{}'",
+        text.replace('\\', "\\\\").replace('\'', "''")
+    ))
 }
 
 fn check_names(fields: &[FieldDraft]) -> Result<()> {
@@ -225,6 +268,19 @@ pub fn create_table(
     table: &TableRef,
     fields: &[FieldDraft],
 ) -> Result<Vec<String>> {
+    create_table_with(flavor, dialect, table, fields, &[], "")
+}
+
+/// [`create_table`] with more lines in the body after the columns and the
+/// key (indexes, constraints), and text after the body (table options).
+pub fn create_table_with(
+    flavor: DdlFlavor,
+    dialect: &Dialect,
+    table: &TableRef,
+    fields: &[FieldDraft],
+    more: &[String],
+    after: &str,
+) -> Result<Vec<String>> {
     ensure!(!table.name.trim().is_empty(), "table_columns_invalid");
     check_names(fields)?;
     let keys: Vec<&FieldDraft> = fields.iter().filter(|f| f.primary_key).collect();
@@ -238,7 +294,7 @@ pub fn create_table(
         lines.push(format!(
             "  {} {}",
             quote_identifier(dialect, field.name.trim())?,
-            definition(flavor, dialect, field, inline)?
+            definition(flavor, field, inline)?
         ));
     }
     if !keys.is_empty() && !sqlite_identity {
@@ -250,8 +306,9 @@ pub fn create_table(
                 .join(", ")
         ));
     }
+    lines.extend(more.iter().map(|line| format!("  {line}")));
     let mut statements = vec![format!(
-        "CREATE TABLE {} (\n{}\n)",
+        "CREATE TABLE {} (\n{}\n){after}",
         qualified(dialect, table)?,
         lines.join(",\n")
     )];
@@ -327,7 +384,7 @@ pub fn alter_table(
                     "COLUMN "
                 },
                 q(&field.name)?,
-                definition(flavor, dialect, &added, false)?
+                definition(flavor, &added, false)?
             ));
             if flavor == DdlFlavor::Postgres && !field.comment.trim().is_empty() {
                 comments.push(field);
@@ -355,7 +412,7 @@ pub fn alter_table(
                     "ALTER TABLE {target} CHANGE COLUMN {} {} {}",
                     q(&old.name)?,
                     q(&field.name)?,
-                    definition(flavor, dialect, &kept, false)?
+                    definition(flavor, &kept, false)?
                 ));
             }
             DdlFlavor::Postgres => {
@@ -424,7 +481,7 @@ pub fn alter_table(
                     statements.push(format!(
                         "ALTER TABLE {target} ALTER COLUMN {} {}",
                         q(&field.name)?,
-                        definition(flavor, dialect, &plain, false)?
+                        definition(flavor, &plain, false)?
                     ));
                 }
             }
@@ -526,7 +583,36 @@ mod tests {
         assert!(type_text(DdlFlavor::MySql, &field("x", "varchar", "1x")).is_err());
         let mut bad = field("x", "int", "");
         bad.default = "1; DROP TABLE t".into();
-        assert!(definition(DdlFlavor::MySql, &MYSQL, &bad, false).is_err());
+        assert!(definition(DdlFlavor::MySql, &bad, false).is_err());
+        // An ENUM keeps its values, not a length and a scale.
+        let status = FieldDraft::from_column(&ColumnInfo {
+            name: "status".into(),
+            data_type: r"enum('new','it''s','a\\b')".into(),
+            nullable: false,
+            primary_key: false,
+            default: None,
+        });
+        assert_eq!(
+            (
+                status.data_type.as_str(),
+                status.length.as_str(),
+                status.scale.as_str()
+            ),
+            ("enum", "", "")
+        );
+        assert_eq!(status.values, ["new", "it's", r"a\b"]);
+        assert_eq!(
+            type_text(DdlFlavor::MySql, &status).unwrap(),
+            r"enum('new','it''s','a\\b')"
+        );
+        // A comment is a plain quoted string, the only form the grammar takes.
+        let mut noted = field("x", "int", "");
+        noted.comment = r"it's a\b".into();
+        assert!(
+            definition(DdlFlavor::MySql, &noted, false)
+                .unwrap()
+                .ends_with(r" COMMENT 'it''s a\\b'")
+        );
     }
 
     #[test]

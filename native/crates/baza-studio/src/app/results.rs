@@ -245,10 +245,40 @@ impl StudioApp {
                 });
             return None;
         }
+        // Hidden columns stay in the result; the grid skips them, and the
+        // keyboard moves between the shown ones.
+        let visible = shown_columns(result, &tab.hidden_columns);
+        if visible.is_empty() {
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(20, 18))
+                .show(ui, |ui| {
+                    widgets::help(
+                        ui,
+                        &p,
+                        l(
+                            "Wszystkie kolumny są ukryte. Wybierz widoczne przyciskiem „Kolumny” nad wynikami.",
+                            "Every column is hidden. Choose the visible ones with “Columns” above the results.",
+                        ),
+                    );
+                });
+            return None;
+        }
+        // Position of a column among the shown ones: a hidden one counts as
+        // the next shown one.
+        let position = |c: usize| {
+            visible
+                .iter()
+                .position(|&v| v >= c)
+                .unwrap_or(visible.len() - 1)
+        };
         let editable =
             tab.table.is_some() && caps.edit_cells && tab.columns.iter().any(|c| c.primary_key);
-        let order = (!tab.order_column.is_empty()).then(|| tab.order_column.clone());
-        let descending = tab.descending;
+        // The columns the rows are ordered by, in turn, and whether descending.
+        let sorts = (!tab.order_column.is_empty())
+            .then(|| (tab.order_column.clone(), tab.descending))
+            .into_iter()
+            .chain(tab.then_by.iter().cloned())
+            .collect::<Vec<_>>();
         let line = egui::Stroke::new(1.0, p.line);
         let body_font = egui::FontId::proportional(p.body());
         let row_height = p.row_height() + 2.0;
@@ -309,6 +339,10 @@ impl StudioApp {
             let screen = ((ui.available_height() / row_height) as usize)
                 .saturating_sub(3)
                 .max(1);
+            // The keys count shown columns only.
+            let last_shown = (last.0, visible.len() - 1);
+            let shown = |(r, c): (usize, usize)| (r, position(c));
+            let actual = |(r, at): (usize, usize)| (r, visible[at]);
             let mut target = None;
             for key in [
                 egui::Key::ArrowUp,
@@ -330,30 +364,33 @@ impl StudioApp {
                             take(ui, egui::Modifiers::NONE, key)
                         };
                         let from = if extend { moving } else { at };
-                        if pressed && let Some(cell) = grid_target(key, command, from, last, screen)
+                        if pressed
+                            && let Some(cell) =
+                                grid_target(key, command, shown(from), last_shown, screen)
                         {
-                            target = Some((cell, extend));
+                            target = Some((actual(cell), extend));
                         }
                     }
                 }
             }
+            let (row, column) = shown(at);
             if take(ui, egui::Modifiers::NONE, egui::Key::Tab) {
                 target = Some((
-                    if at.1 < last.1 {
-                        (at.0, at.1 + 1)
+                    actual(if column < last_shown.1 {
+                        (row, column + 1)
                     } else {
-                        ((at.0 + 1).min(last.0), 0)
-                    },
+                        ((row + 1).min(last.0), 0)
+                    }),
                     false,
                 ));
             }
             if take(ui, egui::Modifiers::SHIFT, egui::Key::Tab) {
                 target = Some((
-                    if at.1 > 0 {
-                        (at.0, at.1 - 1)
+                    actual(if column > 0 {
+                        (row, column - 1)
                     } else {
-                        (at.0.saturating_sub(1), last.1)
-                    },
+                        (row.saturating_sub(1), last_shown.1)
+                    }),
                     false,
                 ));
             }
@@ -445,6 +482,17 @@ impl StudioApp {
         }
         let total_rows = result.rows.len();
         let total_columns = result.columns.len();
+        // The values an ENUM or a SET column takes, offered while it is edited.
+        let column_choices = result
+            .columns
+            .iter()
+            .map(|shown| {
+                tab.columns
+                    .iter()
+                    .find(|column| column.name == shown.name)
+                    .and_then(|column| sql::choices(&column.data_type))
+            })
+            .collect::<Vec<_>>();
         let range = tab.range;
         let marked = |r: usize, c: usize| {
             range.is_some_and(|range| range.contains(r, c, total_rows, total_columns))
@@ -475,6 +523,7 @@ impl StudioApp {
                 }
             });
         let mut copy_as: Option<CopyAs> = None;
+        let mut view_value: Option<(usize, usize)> = None;
         let mut select_all = false;
         let marked_fill = theme::blend(p.bg, p.accent, 0.20);
         // Changes waiting to be saved are tinted; their rows carry a pencil,
@@ -494,7 +543,7 @@ impl StudioApp {
                 visuals.selection.bg_fill = theme::blend(p.bg, p.accent, 0.16);
                 let grid_height = (ui.available_height() - row_height - 6.0).max(60.0);
                 let number_width = 46.0;
-                let count = result.columns.len();
+                let count = visible.len();
                 let column_width =
                     ((ui.available_width() - number_width) / count as f32).max(120.0);
                 let mut table = TableBuilder::new(ui)
@@ -532,13 +581,15 @@ impl StudioApp {
                                 p.muted,
                             );
                         });
-                        for (i, c) in result.columns.iter().enumerate() {
+                        for &i in &visible {
+                            let c = &result.columns[i];
                             let (_, response) = header.col(|ui| {
                                 let rect = ui.max_rect();
                                 let painter = ui.painter();
                                 painter.rect_filled(rect, 0.0, p.side);
                                 painter.hline(rect.x_range(), rect.bottom() - 0.5, line);
-                                let sorted = order.as_deref() == Some(c.name.as_str());
+                                let place = sorts.iter().position(|(name, _)| *name == c.name);
+                                let sorted = place.is_some();
                                 let name = widgets::one_line(
                                     painter,
                                     &c.name,
@@ -554,14 +605,14 @@ impl StudioApp {
                                     p.muted,
                                 );
                                 x += name_width + 5.0;
-                                if sorted {
+                                if let Some(place) = place {
                                     widgets::paint(
                                         painter,
                                         egui::Rect::from_center_size(
                                             egui::pos2(x + 6.0, rect.center().y),
                                             egui::vec2(12.0, 12.0),
                                         ),
-                                        if descending {
+                                        if sorts[place].1 {
                                             Icon::ArrowDown
                                         } else {
                                             Icon::ArrowUp
@@ -569,6 +620,17 @@ impl StudioApp {
                                         p.muted,
                                     );
                                     x += 17.0;
+                                    // Which of several orders this column is.
+                                    if sorts.len() > 1 {
+                                        painter.text(
+                                            egui::pos2(x - 3.0, rect.center().y),
+                                            egui::Align2::LEFT_CENTER,
+                                            (place + 1).to_string(),
+                                            egui::FontId::proportional(p.caption()),
+                                            p.muted,
+                                        );
+                                        x += 9.0;
+                                    }
                                 }
                                 let room = rect.right() - 8.0 - x;
                                 if room > 34.0 && !c.data_type.is_empty() {
@@ -607,11 +669,18 @@ impl StudioApp {
                                     sort = Some(i);
                                 }
                             }
-                            response.on_hover_text(if c.data_type.is_empty() {
+                            let mut tip = if c.data_type.is_empty() {
                                 c.name.clone()
                             } else {
                                 format!("{} · {}", c.name, c.data_type)
-                            });
+                            };
+                            if caps.sort_many && !sorts.is_empty() {
+                                tip.push_str(l(
+                                    "\nShift+klik: sortuj też po tej kolumnie",
+                                    "\nShift+click: also order by this column",
+                                ));
+                            }
+                            response.on_hover_text(tip);
                         }
                     })
                     .body(|body| {
@@ -672,7 +741,8 @@ impl StudioApp {
                                 tab.selected_row = Some(r);
                                 tab.selected_cell = None;
                             }
-                            for (c, cell) in result.rows[r].iter().enumerate() {
+                            for &c in &visible {
+                                let cell = &result.rows[r][c];
                                 let waiting = tab.pending.contains_key(&(r, c));
                                 let cell = tab.pending.get(&(r, c)).unwrap_or(cell);
                                 let new_row = tab.added.contains(&r);
@@ -694,10 +764,56 @@ impl StudioApp {
                                         // A selected row tints its text; the
                                         // value being typed stays plain.
                                         ui.visuals_mut().override_text_color = Some(p.text);
+                                        let field = egui::Id::new(("inline_edit", tab.id, r, c));
+                                        // An ENUM or a SET column lists its values
+                                        // under the cell: the arrows choose one,
+                                        // Space ticks a value of a SET, Enter saves.
+                                        let choices = column_choices[c].as_ref();
+                                        let choice_id = field.with("choice");
+                                        let mut chosen = choices.map(|(_, values)| {
+                                            ui.data(|d| d.get_temp::<usize>(choice_id))
+                                                .unwrap_or_else(|| {
+                                                    values
+                                                        .iter()
+                                                        .position(|v| *v == editor.value)
+                                                        .unwrap_or(0)
+                                                })
+                                                .min(values.len().saturating_sub(1))
+                                        });
+                                        let mut follow = false;
+                                        if let (Some((multiple, values)), Some(at)) =
+                                            (choices, chosen.as_mut())
+                                            && !values.is_empty()
+                                            && ui.memory(|m| m.has_focus(field))
+                                        {
+                                            let count = values.len();
+                                            let none = egui::Modifiers::NONE;
+                                            let step = if take(ui, none, egui::Key::ArrowDown) {
+                                                1
+                                            } else if take(ui, none, egui::Key::ArrowUp) {
+                                                count - 1
+                                            } else {
+                                                0
+                                            };
+                                            if step > 0 {
+                                                *at = (*at + step) % count;
+                                                follow = true;
+                                                if !multiple {
+                                                    editor.value = values[*at].clone();
+                                                }
+                                            }
+                                            if *multiple && take(ui, none, egui::Key::Space) {
+                                                editor.value =
+                                                    toggle_choice(values, &editor.value, *at);
+                                            }
+                                        }
+                                        if let Some(at) = chosen {
+                                            ui.data_mut(|d| d.insert_temp(choice_id, at));
+                                        }
                                         let response = ui.add_enabled(
                                             !editor.null,
                                             TextEdit::singleline(&mut editor.value)
-                                                .id_salt(("inline_edit", tab.id, r, c))
+                                                .id(field)
                                                 .desired_width(
                                                     (ui.available_width() - 34.0).max(30.0),
                                                 )
@@ -746,6 +862,41 @@ impl StudioApp {
                                             true,
                                         )
                                         .clicked();
+                                        if let Some((multiple, values)) = choices {
+                                            let ticked =
+                                                editor.value.split(',').collect::<Vec<_>>();
+                                            let list = values
+                                                .iter()
+                                                .map(|value| widgets::Choice {
+                                                    text: value,
+                                                    note: "",
+                                                    color: p.text,
+                                                    checked: multiple
+                                                        .then(|| ticked.contains(&value.as_str())),
+                                                })
+                                                .collect::<Vec<_>>();
+                                            if let Some(index) = widgets::choice_list(
+                                                ui.ctx(),
+                                                &p,
+                                                choice_id.with("list"),
+                                                rect.left_bottom(),
+                                                &list,
+                                                chosen,
+                                                follow,
+                                            ) {
+                                                ui.data_mut(|d| d.insert_temp(choice_id, index));
+                                                editor.null = false;
+                                                if *multiple {
+                                                    editor.value =
+                                                        toggle_choice(values, &editor.value, index);
+                                                    // The keyboard goes back to the cell.
+                                                    response.request_focus();
+                                                } else {
+                                                    editor.value = values[index].clone();
+                                                    inline_save = true;
+                                                }
+                                            }
+                                        }
                                         response.context_menu(|ui| {
                                             ui.checkbox(&mut editor.null, "NULL");
                                             if ui
@@ -868,6 +1019,11 @@ impl StudioApp {
                                     || (new_row && tab.table.is_some());
                                 if response.double_clicked() && can_edit {
                                     clicked_edit = Some(start_cell_edit(tab.id, r, c, cell));
+                                } else if response.double_clicked()
+                                    && matches!(cell, Cell::Bytes(_))
+                                {
+                                    // Bytes that cannot be changed are read in hex.
+                                    view_value = Some((r, c));
                                 }
                                 response.context_menu(|ui| {
                                     // The menu acts on the mark; a cell outside
@@ -910,6 +1066,13 @@ impl StudioApp {
                                             ui.close();
                                         }
                                     });
+                                    if ui
+                                        .button(l("Podgląd wartości (hex)…", "View value (hex)…"))
+                                        .clicked()
+                                    {
+                                        view_value = Some((r, c));
+                                        ui.close();
+                                    }
                                     if ui.button(l("Zaznacz wszystko", "Select all")).clicked() {
                                         select_all = true;
                                         ui.close();
@@ -1018,7 +1181,7 @@ impl StudioApp {
         }
         let copied = copy_as.and_then(|how| {
             let range = tab.range?;
-            let part = marked_part(result, &range)?;
+            let part = marked_part(result, &range, &tab.hidden_columns)?;
             let cells = part.rows.len() * part.columns.len();
             let table = tab.table.clone().or_else(|| tab.source.clone());
             Some(
@@ -1052,15 +1215,16 @@ impl StudioApp {
                 // Tab: on to the next cell of the row, then the next row.
                 if move_next {
                     let tab = &mut self.tabs[index];
-                    let (rows, columns) = tab
-                        .result
-                        .as_ref()
-                        .map_or((0, 0), |r| (r.rows.len(), r.columns.len()));
-                    if rows > 0 && columns > 0 {
-                        let next = if c + 1 < columns {
-                            (r, c + 1)
-                        } else {
-                            ((r + 1).min(rows - 1), 0)
+                    let (rows, visible) = tab.result.as_ref().map_or((0, Vec::new()), |result| {
+                        (
+                            result.rows.len(),
+                            shown_columns(result, &tab.hidden_columns),
+                        )
+                    });
+                    if rows > 0 && !visible.is_empty() {
+                        let next = match visible.iter().find(|&&shown| shown > c) {
+                            Some(&shown) => (r, shown),
+                            None => ((r + 1).min(rows - 1), visible[0]),
                         };
                         tab.selected_cell = Some(next);
                         tab.selected_row = Some(next.0);
@@ -1106,6 +1270,9 @@ impl StudioApp {
         } else if undo_key || redo_key {
             self.undo_changes(index, redo_key);
         }
+        if let Some((r, c)) = view_value {
+            self.view_value(self.tabs[index].id, r, c);
+        }
         sort
     }
 
@@ -1140,10 +1307,11 @@ impl StudioApp {
             return Vec::new();
         };
         let (rows, columns) = (result.rows.len(), result.columns.len());
+        let shown = |c: &usize| !tab.hidden_columns.contains(&result.columns[*c].name);
         match tab.range {
             Some(range) => match (range.row_span(rows), range.column_span(columns)) {
                 (Some((r0, r1)), Some((c0, c1))) => (r0..=r1)
-                    .flat_map(|r| (c0..=c1).map(move |c| (r, c)))
+                    .flat_map(|r| (c0..=c1).filter(shown).map(move |c| (r, c)))
                     .collect(),
                 _ => Vec::new(),
             },
@@ -1163,6 +1331,14 @@ impl StudioApp {
         let Some(&(top, left)) = cells.iter().min() else {
             return;
         };
+        // A block fills the shown columns from the first marked one.
+        let tab = &self.tabs[index];
+        let shown = tab
+            .result
+            .as_ref()
+            .map(|result| shown_columns(result, &tab.hidden_columns))
+            .unwrap_or_default();
+        let start = shown.iter().position(|&c| c >= left).unwrap_or(shown.len());
         let edits = if block.len() == 1 && block[0].len() == 1 && cells.len() > 1 {
             cells
                 .into_iter()
@@ -1173,9 +1349,10 @@ impl StudioApp {
                 .into_iter()
                 .enumerate()
                 .flat_map(|(dr, row)| {
-                    row.into_iter()
-                        .enumerate()
-                        .map(move |(dc, value)| (top + dr, left + dc, Some(value)))
+                    let shown = &shown;
+                    row.into_iter().enumerate().filter_map(move |(dc, value)| {
+                        Some((top + dr, *shown.get(start + dc)?, Some(value)))
+                    })
                 })
                 .collect()
         };
@@ -1316,6 +1493,7 @@ impl StudioApp {
             alias: None,
         }];
         count.order_by = None;
+        count.then_by.clear();
         count.limit = 1;
         count.offset = 0;
         let text = match count.sql(db.dialect()) {
@@ -1711,6 +1889,9 @@ impl StudioApp {
                             .min_col_width(120.0)
                             .show(ui, |ui| {
                                 for (c, column) in result.columns.iter().enumerate() {
+                                    if tab.hidden_columns.contains(&column.name) {
+                                        continue;
+                                    }
                                     let cell = &result.rows[r][c];
                                     ui.label(
                                         RichText::new(&column.name)
@@ -1769,11 +1950,14 @@ impl StudioApp {
     }
 
     /// Sort a browsable result by the column with this index: the same column
-    /// again reverses the order.
+    /// again reverses the order. With Shift the column is one more to order
+    /// by: again the other way, and a third time it is left out.
     pub(super) fn sort_result(&mut self, index: usize, column: usize) {
-        if !self.capabilities(self.tabs[index].connection).sort {
+        let caps = *self.capabilities(self.tabs[index].connection);
+        if !caps.sort {
             return;
         }
+        let shift = self.ctx.input(|i| i.modifiers.shift);
         let tab = &mut self.tabs[index];
         let Some(name) = tab
             .result
@@ -1786,8 +1970,21 @@ impl StudioApp {
         if tab.source.is_none() && tab.table.is_none() {
             return;
         }
-        tab.descending = tab.order_column == name && !tab.descending;
-        tab.order_column = name;
+        if shift && caps.sort_many && !tab.order_column.is_empty() && tab.order_column != name {
+            match tab.then_by.iter().position(|(sorted, _)| *sorted == name) {
+                Some(at) if !tab.then_by[at].1 => tab.then_by[at].1 = true,
+                Some(at) => {
+                    tab.then_by.remove(at);
+                }
+                None => tab.then_by.push((name, false)),
+            }
+        } else {
+            if tab.order_column != name {
+                tab.then_by.clear();
+            }
+            tab.descending = tab.order_column == name && !tab.descending;
+            tab.order_column = name;
+        }
         self.browse(index);
     }
 
@@ -1795,8 +1992,9 @@ impl StudioApp {
     pub(super) fn browse(&mut self, index: usize) {
         if self.has_staged(index) {
             let text = self.tr(
-                "Najpierw zapisz zmiany (✓ albo Ctrl+S) albo je porzuć (✕).",
-                "Save the changes first (✓ or Ctrl+S) or discard them (✕).",
+                // The font has no ✓ and ✕: the buttons are painted icons.
+                "Najpierw zapisz zmiany (Ctrl+S) albo je porzuć.",
+                "Save the changes first (Ctrl+S) or discard them.",
             );
             self.notify(text.into(), true);
             return;
@@ -1816,7 +2014,10 @@ impl StudioApp {
         let mut b = PageRequest::first(table);
         b.limit = limit;
         b.offset = tab.page * u64::from(limit);
-        if !tab.filter_value.is_empty() {
+        if tab.filter_sql {
+            // Checked where the driver writes it (`sql::typed_condition`).
+            b.condition = Some(tab.filter_value.trim().to_owned()).filter(|c| !c.is_empty());
+        } else if !tab.filter_value.is_empty() {
             if tab.filter_column.is_empty() {
                 // Without a chosen column, search the first one.
                 if let Some(first) = tab.result.as_ref().and_then(|r| r.columns.first()) {
@@ -1831,6 +2032,7 @@ impl StudioApp {
         }
         if !tab.order_column.is_empty() {
             b.order_by = Some((tab.order_column.clone(), tab.descending));
+            b.then_by = tab.then_by.clone();
         }
         match db.page_text(&b) {
             Ok(s) => {
@@ -1993,6 +2195,29 @@ pub(super) fn delete_many_words(
 /// The editor for one cell. Short single-line values are edited in the grid;
 /// JSON documents, multi-line text and long values open the larger editor,
 /// with JSON laid out over several lines.
+/// Indexes of the columns of a result the grid shows: all but the hidden.
+pub(super) fn shown_columns(
+    result: &QueryResult,
+    hidden: &std::collections::BTreeSet<String>,
+) -> Vec<usize> {
+    (0..result.columns.len())
+        .filter(|&c| !hidden.contains(&result.columns[c].name))
+        .collect()
+}
+
+/// The value of a SET column with `values[index]` ticked or no longer
+/// ticked, its values in the order of the type.
+pub(super) fn toggle_choice(values: &[String], current: &str, index: usize) -> String {
+    let ticked = current.split(',').collect::<Vec<_>>();
+    values
+        .iter()
+        .enumerate()
+        .filter(|(i, value)| ticked.contains(&value.as_str()) != (*i == index))
+        .map(|(_, value)| value.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 pub(super) fn start_cell_edit(tab: Uuid, row: usize, column: usize, cell: &Cell) -> CellEditor {
     let value = cell.display();
     let json = matches!(cell, Cell::Json(_));
@@ -2074,6 +2299,20 @@ pub(super) fn pretty_json(text: &str) -> String {
         return text.to_owned();
     }
     out
+}
+
+#[cfg(test)]
+mod choice_tests {
+    use super::toggle_choice;
+
+    #[test]
+    fn a_set_value_keeps_the_order_of_the_type() {
+        let values = ["read", "write", "admin"].map(String::from);
+        assert_eq!(toggle_choice(&values, "", 1), "write");
+        assert_eq!(toggle_choice(&values, "write", 0), "read,write");
+        assert_eq!(toggle_choice(&values, "admin,read", 1), "read,write,admin");
+        assert_eq!(toggle_choice(&values, "read,write", 0), "write");
+    }
 }
 
 #[cfg(test)]
@@ -2176,14 +2415,22 @@ pub(super) enum CopyAs {
 }
 
 /// The marked part of a result, as a result of its own.
-pub(super) fn marked_part(result: &QueryResult, range: &GridRange) -> Option<QueryResult> {
+pub(super) fn marked_part(
+    result: &QueryResult,
+    range: &GridRange,
+    hidden: &std::collections::BTreeSet<String>,
+) -> Option<QueryResult> {
     let (r0, r1) = range.row_span(result.rows.len())?;
     let (c0, c1) = range.column_span(result.columns.len())?;
+    // A hidden column is not copied with the mark around it.
+    let columns = (c0..=c1)
+        .filter(|&c| !hidden.contains(&result.columns[c].name))
+        .collect::<Vec<_>>();
     Some(QueryResult {
-        columns: result.columns[c0..=c1].to_vec(),
+        columns: columns.iter().map(|&c| result.columns[c].clone()).collect(),
         rows: result.rows[r0..=r1]
             .iter()
-            .map(|row| row[c0..=c1].to_vec())
+            .map(|row| columns.iter().map(|&c| row[c].clone()).collect())
             .collect(),
         affected: 0,
         truncated: false,
@@ -2292,7 +2539,7 @@ mod grid_range_tests {
         let data = result(3, 3);
         let mut range = GridRange::cell(0, 0);
         range.focus = (1, 1);
-        let part = marked_part(&data, &range).unwrap();
+        let part = marked_part(&data, &range, &Default::default()).unwrap();
         assert_eq!(
             clipboard_text(&part, CopyAs::Text, None, None).unwrap(),
             "0:0\t0:1\n1:0\t"
@@ -2307,7 +2554,7 @@ mod grid_range_tests {
     #[test]
     fn marked_rows_become_insert_statements() {
         let data = result(2, 2);
-        let part = marked_part(&data, &GridRange::rows(0)).unwrap();
+        let part = marked_part(&data, &GridRange::rows(0), &Default::default()).unwrap();
         let table = TableRef {
             schema: "main".into(),
             name: "t".into(),

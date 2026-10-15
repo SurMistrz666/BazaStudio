@@ -67,6 +67,20 @@ impl StudioApp {
         let mut switch_to = None;
         let (mut run, mut stop, mut load, mut save) = (false, false, false, false);
         let (mut library, mut new_tab, mut close) = (false, false, false);
+        let mut beautify = false;
+        // The dialect formatting reads the text with.
+        let dialect = self.tabs[index]
+            .connection
+            .and_then(|c| {
+                self.databases.get(&c).map(|db| *db.dialect()).or_else(|| {
+                    self.profiles
+                        .connections
+                        .iter()
+                        .find(|p| p.id == c)
+                        .map(|p| *p.dialect())
+                })
+            })
+            .unwrap_or(Dialect::ANSI);
         let tab = &mut self.tabs[index];
         let tabid = tab.id;
         let busy = tab.busy;
@@ -156,6 +170,22 @@ impl StudioApp {
             .clicked();
             save = widgets::icon_button(ui, &p, Icon::Save, l("Zapisz plik SQL", "Save SQL file"))
                 .clicked();
+            if !console {
+                beautify = widgets::icon_button(
+                    ui,
+                    &p,
+                    Icon::Code,
+                    &format!(
+                        "{} ({})",
+                        l(
+                            "Formatuj SQL: zaznaczenie albo całość",
+                            "Format SQL: the selection or all of it"
+                        ),
+                        super::shortcuts::keys_text("Mod+Shift+F", en)
+                    ),
+                )
+                .clicked();
+            }
             library = widgets::icon_button(
                 ui,
                 &p,
@@ -469,6 +499,26 @@ impl StudioApp {
                 text_change = Some(editor_text::change_case(&tab.sql, selection.clone(), true));
             } else if take_mod(ui, true, egui::Key::L) && !selection.is_empty() {
                 text_change = Some(editor_text::change_case(&tab.sql, selection, false));
+            } else if take_mod(ui, true, egui::Key::F) {
+                beautify = true;
+            }
+        }
+        if beautify && !console {
+            // The selection, or the whole text when nothing is selected.
+            let chosen = tab
+                .selection
+                .clone()
+                .filter(|r| !r.is_empty())
+                .unwrap_or(0..tab.sql.chars().count());
+            let bytes = editor_text::byte_of(&tab.sql, chosen.start)
+                ..editor_text::byte_of(&tab.sql, chosen.end);
+            match baza_core::format::beautify(&dialect, &tab.sql[bytes]) {
+                Ok(formatted) => {
+                    let (text, end) =
+                        editor_text::replace_chars(&tab.sql, chosen.clone(), &formatted);
+                    text_change = Some((text, chosen.start..end));
+                }
+                Err(error) => tab.error = Some(error.to_string()),
             }
         }
         if let Some((text, selection)) = text_change {

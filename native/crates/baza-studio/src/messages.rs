@@ -29,6 +29,14 @@ pub fn describe(code: &str, en: bool) -> String {
             )
         };
     }
+    // A refused filter condition names what in it was refused.
+    if let Some((code, detail)) = code
+        .strip_suffix(']')
+        .and_then(|rest| rest.split_once(" ["))
+        && let Some(text) = condition_detail(code, detail, en)
+    {
+        return text;
+    }
     // The keychain reports its own status number after these prefixes.
     if code.starts_with("vault_keychain_tool_error_") || code.starts_with("vault_keychain_error_") {
         return if en { KEYCHAIN.1 } else { KEYCHAIN.0 }.into();
@@ -42,6 +50,32 @@ pub fn describe(code: &str, en: bool) -> String {
     }
     let (pl, english) = known(code).unwrap_or_else(|| family(code));
     if en { english } else { pl }.into()
+}
+
+/// Sentence for a filter condition refused because of `detail`: a word or a
+/// function of it, or the error class the database reported.
+fn condition_detail(code: &str, detail: &str, en: bool) -> Option<String> {
+    Some(match (code, en) {
+        ("filter_condition_word", false) => format!(
+            "Filtr: słowo {detail} jest niedozwolone. Warunek wybiera tylko wiersze tej tabeli; kolumnę o takiej nazwie ujmij w cudzysłów."
+        ),
+        ("filter_condition_word", true) => format!(
+            "Filter: the word {detail} is not allowed. A condition only picks rows of this table; put a column with this name in quotes."
+        ),
+        ("filter_condition_function", false) => format!(
+            "Filtr: funkcja {detail} jest niedozwolona. Warunek może używać funkcji, które tylko liczą wartość, np. LOWER, COALESCE, DATE."
+        ),
+        ("filter_condition_function", true) => format!(
+            "Filter: the function {detail} is not allowed. A condition may use functions that only compute a value, such as LOWER, COALESCE, DATE."
+        ),
+        ("filter_condition_rejected", false) => format!(
+            "Baza danych odrzuciła warunek filtra (kod błędu {detail}). Popraw warunek albo wyczyść pole filtra."
+        ),
+        ("filter_condition_rejected", true) => format!(
+            "The database rejected the filter condition (error code {detail}). Correct the condition or clear the filter field."
+        ),
+        _ => return None,
+    })
 }
 
 /// The system keychain did not hand over the key of the vault.
@@ -234,6 +268,107 @@ fn known(code: &str) -> Option<(&'static str, &'static str)> {
         "sql_invalid" | "sql_unterminated_literal" => (
             "SQL jest niekompletny. Sprawdź cudzysłowy i średniki.",
             "The SQL is incomplete. Check the quotes and semicolons.",
+        ),
+        "column_values_invalid" => (
+            "Pole ENUM albo SET potrzebuje co najmniej jednej wartości.",
+            "An ENUM or SET field needs at least one value.",
+        ),
+        "index_invalid" => (
+            "Indeks potrzebuje nazwy i co najmniej jednej kolumny; długość to liczba.",
+            "An index needs a name and at least one column; a length is a number.",
+        ),
+        "foreign_key_invalid" => (
+            "Klucz obcy potrzebuje nazwy, tabeli docelowej i par kolumn po obu stronach.",
+            "A foreign key needs a name, a referenced table and pairs of columns on both sides.",
+        ),
+        "check_invalid" => (
+            "Sprawdzenie potrzebuje nazwy i jednego warunku, bez średnika i komentarzy.",
+            "A check needs a name and one condition, without a semicolon or comments.",
+        ),
+        "trigger_invalid" => (
+            "Wyzwalacz potrzebuje nazwy i treści; DELIMITER nie jest potrzebny.",
+            "A trigger needs a name and a body; DELIMITER is not needed.",
+        ),
+        "table_option_invalid" => (
+            "Jedna z opcji tabeli ma niedozwoloną wartość.",
+            "One of the table options has a value that is not allowed.",
+        ),
+        "partition_invalid" => (
+            "Partycje są niepełne: sprawdź wyrażenie, wartości każdej partycji albo ich liczbę.",
+            "The partitions are incomplete: check the expression, the values of each partition or their count.",
+        ),
+        "index_name_duplicate" => (
+            "Dwa indeksy mają tę samą nazwę.",
+            "Two indexes have the same name.",
+        ),
+        "constraint_name_duplicate" => (
+            "Dwa klucze obce albo sprawdzenia mają tę samą nazwę.",
+            "Two foreign keys or checks have the same name.",
+        ),
+        "trigger_name_duplicate" => (
+            "Dwa wyzwalacze mają tę samą nazwę.",
+            "Two triggers have the same name.",
+        ),
+        "builder_no_table" => (
+            "Dodaj tabelę na płótno kreatora.",
+            "Put a table on the canvas of the builder.",
+        ),
+        "builder_field_invalid" => (
+            "Jedna z kolumn należy do tabeli, której nie ma już w zapytaniu.",
+            "One of the columns belongs to a table that is no longer in the query.",
+        ),
+        "builder_condition_value" => (
+            "Warunek potrzebuje wartości: liczby, tekstu w apostrofach albo kolumny.",
+            "A condition needs a value: a number, text in quotes or a column.",
+        ),
+        "builder_limit_invalid" => (
+            "Liczba wierszy i pominiętych wierszy to liczby całkowite.",
+            "The number of rows and of skipped rows are whole numbers.",
+        ),
+        "builder_offset_needs_limit" => (
+            "Pomijanie wierszy w tej bazie wymaga też limitu wierszy.",
+            "Skipping rows needs a row limit as well on this database.",
+        ),
+        "engine_foreign_keys_unsupported" => (
+            "Ten silnik nie obsługuje kluczy obcych. Usuń je na karcie „Klucze obce” albo zostań przy InnoDB.",
+            "This engine does not keep foreign keys. Remove them on the “Foreign keys” page or stay with InnoDB.",
+        ),
+        "comment_invalid" => ("Komentarz jest za długi.", "The comment is too long."),
+        "blob_layout_limit" => (
+            "Zapisanych struktur jest za dużo albo jedna z nich jest za długa.",
+            "Too many structures are kept, or one of them is too long.",
+        ),
+        "blob_layout_task_failed" => (
+            "Nie udało się odczytać ani zapisać struktur kolumn.",
+            "The structures of the columns could not be read or written.",
+        ),
+        "filter_condition_empty" => (
+            "Filtr: wpisz warunek, np. id = 19 OR secret IS NULL.",
+            "Filter: type a condition, such as id = 19 OR secret IS NULL.",
+        ),
+        "filter_condition_too_long" => (
+            "Filtr: warunek jest za długi.",
+            "Filter: the condition is too long.",
+        ),
+        "filter_condition_unterminated" => (
+            "Filtr: tekst albo nazwa w cudzysłowie nie jest zamknięta.",
+            "Filter: a quoted text or name is not closed.",
+        ),
+        "filter_condition_comment" => (
+            "Filtr: komentarze (--, #, /* */) nie są dozwolone w warunku.",
+            "Filter: comments (--, #, /* */) are not allowed in a condition.",
+        ),
+        "filter_condition_statements" => (
+            "Filtr: warunek nie może zawierać średnika ani drugiego polecenia.",
+            "Filter: a condition cannot contain a semicolon or a second statement.",
+        ),
+        "filter_condition_parentheses" => (
+            "Filtr: nawiasy w warunku się nie domykają.",
+            "Filter: the parentheses of the condition do not match.",
+        ),
+        "filter_condition_rejected" => (
+            "Baza danych odrzuciła warunek filtra. Popraw warunek albo wyczyść pole filtra.",
+            "The database rejected the filter condition. Correct the condition or clear the filter field.",
         ),
         "sql_too_many_statements" => (
             "Plik zawiera zbyt wiele poleceń SQL.",
@@ -499,6 +634,16 @@ mod tests {
             "vault_keychain_tool_error_44",
             "vault_keychain_error_-25293",
             "vault_task_failed",
+            "filter_condition_empty",
+            "filter_condition_too_long",
+            "filter_condition_unterminated",
+            "filter_condition_comment",
+            "filter_condition_statements",
+            "filter_condition_parentheses",
+            "filter_condition_rejected",
+            "filter_condition_rejected [42601]",
+            "filter_condition_word [SELECT]",
+            "filter_condition_function [SLEEP]",
         ] {
             for en in [false, true] {
                 let text = describe(code, en);

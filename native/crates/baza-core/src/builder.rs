@@ -94,9 +94,13 @@ pub struct QueryBuilder {
     pub table: TableRef,
     pub projections: Vec<Projection>,
     pub filters: Vec<Filter>,
+    /// A condition typed by the user: see [`PageRequest::condition`].
+    pub condition: Option<String>,
     pub joins: Vec<Join>,
     pub group_by: Vec<String>,
     pub order_by: Option<(String, bool)>,
+    /// Further columns to order by: see [`PageRequest::then_by`].
+    pub then_by: Vec<(String, bool)>,
     pub limit: u32,
     pub offset: u64,
 }
@@ -106,9 +110,11 @@ impl QueryBuilder {
             table: t,
             projections: vec![],
             filters: vec![],
+            condition: None,
             joins: vec![],
             group_by: vec![],
             order_by: None,
+            then_by: vec![],
             limit: 500,
             offset: 0,
         }
@@ -118,7 +124,9 @@ impl QueryBuilder {
     pub fn page(request: &PageRequest) -> Self {
         Self {
             filters: request.filters.clone(),
+            condition: request.condition.clone(),
             order_by: request.order_by.clone(),
+            then_by: request.then_by.clone(),
             limit: request.limit,
             offset: request.offset,
             ..Self::table(request.container.clone())
@@ -230,6 +238,14 @@ impl QueryBuilder {
                 .collect::<anyhow::Result<Vec<String>>>()?;
             s.push_str(&format!("\nWHERE {}", f.join(" AND ")));
         }
+        if let Some(typed) = &self.condition {
+            let typed = typed_condition(dialect, typed)?;
+            s.push_str(&if self.filters.is_empty() {
+                format!("\nWHERE {typed}")
+            } else {
+                format!(" AND {typed}")
+            });
+        }
         if !self.group_by.is_empty() {
             s.push_str(&format!(
                 "\nGROUP BY {}",
@@ -240,12 +256,18 @@ impl QueryBuilder {
                     .join(", ")
             ));
         }
-        if let Some((c, desc)) = &self.order_by {
-            s.push_str(&format!(
-                "\nORDER BY {} {}",
-                qcol(c)?,
-                if *desc { "DESC" } else { "ASC" }
-            ));
+        if let Some(first) = &self.order_by {
+            let terms = std::iter::once(first)
+                .chain(&self.then_by)
+                .map(|(c, desc)| {
+                    Ok(format!(
+                        "{} {}",
+                        qcol(c)?,
+                        if *desc { "DESC" } else { "ASC" }
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            s.push_str(&format!("\nORDER BY {}", terms.join(", ")));
         }
         match dialect.paging {
             Paging::LimitOffset => {
@@ -346,6 +368,49 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn a_typed_condition_goes_in_parentheses_next_to_the_other_filters() {
+        let table = TableRef {
+            schema: String::new(),
+            name: "a".into(),
+            kind: "table".into(),
+        };
+        let mut b = QueryBuilder::table(table.clone());
+        b.condition = Some("id = 19 or secret is null".into());
+        assert_eq!(
+            b.sql(&SQLITE).unwrap(),
+            "SELECT *\nFROM \"a\"\nWHERE (id = 19 or secret is null)\nLIMIT 500 OFFSET 0"
+        );
+        b.filters.push(Filter {
+            column: "name".into(),
+            op: FilterOp::Equal,
+            value: Cell::Text("x".into()),
+        });
+        let sql = b.sql(&SQLITE).unwrap();
+        assert!(
+            sql.contains("WHERE \"name\" = 'x' AND (id = 19 or secret is null)\n"),
+            "{sql}"
+        );
+        assert!(editable_table(&SQLITE, &sql, std::slice::from_ref(&table)).is_some());
+        // A refused condition is never written.
+        b.condition = Some("1 = 1; DROP TABLE a".into());
+        assert!(b.sql(&SQLITE).is_err());
+    }
+    #[test]
+    fn a_page_is_ordered_by_several_columns_in_turn() {
+        let mut b = QueryBuilder::table(TableRef {
+            schema: String::new(),
+            name: "a".into(),
+            kind: "table".into(),
+        });
+        b.order_by = Some(("status".into(), false));
+        b.then_by = vec![("created".into(), true), ("id".into(), false)];
+        assert!(
+            b.sql(&SQLITE)
+                .unwrap()
+                .contains("\nORDER BY \"status\" ASC, \"created\" DESC, \"id\" ASC\n")
+        );
     }
     #[test]
     fn aggregates_and_pages() {

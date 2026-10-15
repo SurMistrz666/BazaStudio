@@ -62,7 +62,9 @@ pub static SPEC: EngineSpec = EngineSpec {
         // Databases are the level above collections.
         schemas: true,
         filter: true,
+        condition: false,
         sort: true,
+        sort_many: false,
         edit_cells: true,
         insert_rows: true,
         delete_rows: true,

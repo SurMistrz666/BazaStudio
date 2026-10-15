@@ -117,7 +117,10 @@ pub static SPEC: EngineSpec = EngineSpec {
         schemas: true,
         // Within limits: see `browse`.
         filter: true,
+        // A CQL `WHERE` takes the partition key first, not any condition.
+        condition: false,
         sort: true,
+        sort_many: false,
         edit_cells: true,
         insert_rows: true,
         delete_rows: true,

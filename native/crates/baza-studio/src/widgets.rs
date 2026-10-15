@@ -1268,6 +1268,117 @@ pub fn field<'t>(p: &Palette, text: &'t mut dyn egui::TextBuffer) -> egui::TextE
         .font(egui::FontId::proportional(p.body()))
 }
 
+/// One line of a [`choice_list`].
+pub struct Choice<'a> {
+    pub text: &'a str,
+    /// Muted, at the right end of the line.
+    pub note: &'a str,
+    pub color: Color32,
+    /// A box that is ticked or not, where several values are chosen together.
+    pub checked: Option<bool>,
+}
+
+/// Choices painted above everything at `at`: names that complete a word, or
+/// the values a column takes. The line the arrows chose is marked, and
+/// brought into view when `follow` is set. Returns the line that was clicked.
+pub fn choice_list(
+    ctx: &egui::Context,
+    p: &Palette,
+    id: egui::Id,
+    at: egui::Pos2,
+    choices: &[Choice],
+    chosen: Option<usize>,
+    follow: bool,
+) -> Option<usize> {
+    let mut clicked = None;
+    let row = p.control_height() - 4.0;
+    let text_font = egui::FontId::monospace(p.code() - 1.0);
+    let note_font = egui::FontId::proportional(p.small());
+    let boxes = choices.iter().any(|choice| choice.checked.is_some());
+    egui::Area::new(id)
+        .order(egui::Order::Foreground)
+        .fixed_pos(at)
+        .constrain(true)
+        .show(ctx, |ui| {
+            let measure = |text: &str, font: &egui::FontId| {
+                ui.painter()
+                    .layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            };
+            let width = choices
+                .iter()
+                .map(|c| measure(c.text, &text_font) + measure(c.note, &note_font))
+                .fold(0.0, f32::max)
+                + if boxes { 62.0 } else { 40.0 };
+            egui::Frame::NONE
+                .fill(p.bg)
+                .stroke(Stroke::new(1.0, p.line))
+                .corner_radius(6)
+                .inner_margin(egui::Margin::same(4))
+                .shadow(ctx.global_style().visuals.popup_shadow)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(row * 10.0)
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            for (index, choice) in choices.iter().enumerate() {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    vec2(width.clamp(220.0, 520.0), row),
+                                    egui::Sense::click(),
+                                );
+                                let painter = ui.painter();
+                                if Some(index) == chosen {
+                                    painter.rect_filled(rect, 4, p.accent.gamma_multiply(0.3));
+                                    if follow {
+                                        ui.scroll_to_rect(rect, None);
+                                    }
+                                } else if response.hovered() {
+                                    painter.rect_filled(rect, 4, p.raised_hover);
+                                }
+                                let mut left = rect.left() + 8.0;
+                                if let Some(checked) = choice.checked {
+                                    let mark = Rect::from_center_size(
+                                        pos2(left + 7.0, rect.center().y),
+                                        vec2(14.0, 14.0),
+                                    );
+                                    if checked {
+                                        painter.rect_filled(mark, 3.0, p.accent);
+                                        paint(painter, mark.shrink(2.5), Icon::Check, p.bg);
+                                    } else {
+                                        painter.rect_stroke(
+                                            mark,
+                                            3.0,
+                                            Stroke::new(1.0, p.muted),
+                                            egui::StrokeKind::Inside,
+                                        );
+                                    }
+                                    left += 22.0;
+                                }
+                                painter.text(
+                                    pos2(left, rect.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    choice.text,
+                                    text_font.clone(),
+                                    choice.color,
+                                );
+                                painter.text(
+                                    rect.right_center() - vec2(8.0, 0.0),
+                                    egui::Align2::RIGHT_CENTER,
+                                    choice.note,
+                                    note_font.clone(),
+                                    p.muted,
+                                );
+                                if response.clicked() {
+                                    clicked = Some(index);
+                                }
+                            }
+                        });
+                });
+        });
+    clicked
+}
+
 /// Add a single-line field of a form. When the Tab key brings the keyboard
 /// to it, its text is selected, so typing replaces a default such as
 /// `localhost` instead of being appended to it. A click places the cursor.

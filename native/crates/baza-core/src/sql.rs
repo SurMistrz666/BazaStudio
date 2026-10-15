@@ -28,7 +28,7 @@ pub fn like_pattern(text: &str) -> String {
 
 /// One lexical element of SQL text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Lexeme {
+pub(crate) enum Lexeme {
     Space,
     Comment,
     /// A string literal, including a PostgreSQL dollar-quoted body.
@@ -93,7 +93,7 @@ fn dollar_tag(b: &[u8], i: usize) -> Option<usize> {
 /// body never ends.
 ///
 /// [`Lexer`]: crate::engine::Lexer
-fn lex(
+pub(crate) fn lex(
     dialect: &Dialect,
     sql: &str,
     mut each: impl FnMut(Lexeme, std::ops::Range<usize>),
@@ -360,6 +360,163 @@ pub fn editable_table(dialect: &Dialect, sql: &str, tables: &[TableRef]) -> Opti
     }
     Some(matches[0].clone())
 }
+
+/// The values a column of an `ENUM(…)` or a `SET(…)` type may hold, read
+/// from the type as MySQL and MariaDB describe it, and whether a value is
+/// several of them together (`SET`). `None` for any other type.
+pub fn choices(data_type: &str) -> Option<(bool, Vec<String>)> {
+    let text = data_type.trim();
+    let lower = text.to_ascii_lowercase();
+    let (multiple, open) = if lower.starts_with("enum(") {
+        (false, 5)
+    } else if lower.starts_with("set(") {
+        (true, 4)
+    } else {
+        return None;
+    };
+    let mut values = Vec::new();
+    let mut chars = text[open..].chars().peekable();
+    loop {
+        // A value is a quoted text; a quote inside is doubled, and a
+        // backslash escapes the character after it, as information_schema
+        // of MySQL and MariaDB writes them.
+        if chars.next()? != '\'' {
+            return None;
+        }
+        let mut value = String::new();
+        loop {
+            match chars.next()? {
+                '\'' if chars.peek() == Some(&'\'') => {
+                    chars.next();
+                    value.push('\'');
+                }
+                '\'' => break,
+                '\\' => value.push(chars.next()?),
+                c => value.push(c),
+            }
+        }
+        values.push(value);
+        match chars.next()? {
+            ',' => continue,
+            ')' => return Some((multiple, values)),
+            _ => return None,
+        }
+    }
+}
+
+/// Longest condition the filter of "Dane tabeli" takes.
+const MAX_CONDITION_BYTES: usize = 4096;
+/// Words that start another statement or read rows of another table. A
+/// condition on the rows of one table never needs them; a column named so is
+/// written in quotes.
+#[rustfmt::skip]
+const CONDITION_WORDS: &[&str] = &[
+    "SELECT", "TABLE", "VALUES", "UNION", "INTERSECT", "EXCEPT", "INTO", "INSERT", "UPDATE",
+    "DELETE", "MERGE", "DROP", "ALTER", "CREATE", "GRANT", "REVOKE", "EXEC", "EXECUTE", "CALL",
+];
+/// Keywords that may stand right before a parenthesis in a condition.
+#[rustfmt::skip]
+const CONDITION_KEYWORDS: &[&str] = &[
+    "AND", "OR", "NOT", "IN", "ANY", "ALL", "SOME", "LIKE", "ILIKE", "BETWEEN", "WHEN", "THEN",
+    "ELSE", "FROM", "FOR", "ESCAPE",
+];
+/// Types with a length and functions that only compute a value: the calls a
+/// condition may make, besides [`CONDITION_KEYWORDS`]. A function outside
+/// this list could change data or the server (`pg_sleep`, `nextval`,
+/// `load_file`, …), so it is refused.
+#[rustfmt::skip]
+pub const CONDITION_FUNCTIONS: &[&str] = &[
+    // Types in a cast.
+    "CHAR", "VARCHAR", "NCHAR", "NVARCHAR", "VARCHAR2", "NVARCHAR2", "BINARY", "VARBINARY",
+    "DECIMAL", "NUMERIC", "NUMBER", "FLOAT", "TIME", "TIMESTAMP", "DATETIME2", "DATETIMEOFFSET",
+    // Values, text and numbers.
+    "CAST", "TRY_CAST", "CONVERT", "TRY_CONVERT", "COALESCE", "NULLIF", "IFNULL", "ISNULL", "NVL",
+    "NVL2", "IIF", "IF", "GREATEST", "LEAST", "LOWER", "UPPER", "LCASE", "UCASE", "LENGTH", "LEN",
+    "CHAR_LENGTH", "CHARACTER_LENGTH", "OCTET_LENGTH", "TRIM", "LTRIM", "RTRIM", "BTRIM", "SUBSTR",
+    "SUBSTRING", "LEFT", "RIGHT", "CONCAT", "CONCAT_WS", "REPLACE", "POSITION", "INSTR", "STRPOS",
+    "LOCATE", "CHARINDEX", "REVERSE", "LPAD", "RPAD", "INITCAP", "SPLIT_PART", "HEX", "UNHEX",
+    "MD5", "REGEXP_LIKE", "ABS", "CEIL", "CEILING", "FLOOR", "ROUND", "TRUNC", "TRUNCATE", "MOD",
+    "SIGN", "POWER", "POW", "SQRT", "EXP", "LN", "LOG", "LOG10",
+    // Dates.
+    "DATE", "DATETIME", "YEAR", "MONTH", "DAY", "WEEK", "DAYOFWEEK", "HOUR", "MINUTE", "SECOND",
+    "EXTRACT", "NOW", "CURDATE", "CURTIME", "GETDATE", "GETUTCDATE", "SYSDATETIME", "DATE_TRUNC",
+    "DATE_PART", "DATEPART", "DATEADD", "DATEDIFF", "DATE_ADD", "DATE_SUB", "DATE_FORMAT",
+    "TO_CHAR", "TO_DATE", "TO_NUMBER", "TO_TIMESTAMP", "STRFTIME", "JULIANDAY", "UNIX_TIMESTAMP",
+    "FROM_UNIXTIME",
+    // JSON.
+    "JSON_EXTRACT", "JSON_VALUE", "JSON_UNQUOTE", "JSON_CONTAINS", "JSON_LENGTH", "JSON_TYPE",
+    "JSON_EXTRACT_PATH_TEXT",
+    // ClickHouse.
+    "TODATE", "TODATETIME", "TOSTRING", "TOINT32", "TOINT64", "TOUINT32", "TOUINT64", "TOFLOAT64",
+    "TOYEAR", "TOMONTH", "TOSTARTOFDAY", "TODAY", "YESTERDAY", "EMPTY", "NOTEMPTY", "HAS", "MATCH",
+];
+
+/// A condition typed into the filter of "Dane tabeli", ready to go after
+/// `WHERE`: checked, and in parentheses so that it stays one expression next
+/// to the other filters. It is read with the rules of the engine's quotes and
+/// comments and has to be a condition on the rows of the table: no second
+/// statement, no comment, no subquery, every parenthesis closed where it was
+/// opened, and no function outside [`CONDITION_FUNCTIONS`]. Whether the engine
+/// takes it as valid SQL is for the server to say; this check makes sure it
+/// can be nothing but a condition.
+pub fn typed_condition(dialect: &Dialect, text: &str) -> anyhow::Result<String> {
+    let text = text.trim();
+    anyhow::ensure!(!text.is_empty(), "filter_condition_empty");
+    anyhow::ensure!(
+        text.len() <= MAX_CONDITION_BYTES && !text.contains('\0'),
+        "filter_condition_too_long"
+    );
+    let mut tokens = Vec::new();
+    lex(dialect, text, |kind, range| {
+        if kind != Lexeme::Space {
+            tokens.push((kind, &text[range]));
+        }
+    })
+    .map_err(|_| anyhow::anyhow!("filter_condition_unterminated"))?;
+    // The word in a message is the user's own text; a long one is cut.
+    let shown = |word: &str| word.chars().take(64).collect::<String>();
+    let mut depth = 0usize;
+    for (index, &(kind, token)) in tokens.iter().enumerate() {
+        match (kind, token) {
+            (Lexeme::Comment, _) => anyhow::bail!("filter_condition_comment"),
+            (Lexeme::Symbol, ";") => anyhow::bail!("filter_condition_statements"),
+            (Lexeme::Word, word)
+                if CONDITION_WORDS.iter().any(|w| w.eq_ignore_ascii_case(word)) =>
+            {
+                anyhow::bail!("filter_condition_word [{}]", shown(&word.to_uppercase()))
+            }
+            (Lexeme::Symbol, ")") => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| anyhow::anyhow!("filter_condition_parentheses"))?;
+            }
+            (Lexeme::Symbol, "(") => {
+                depth += 1;
+                // A name right before a parenthesis is called; a quoted
+                // name may be a function as well.
+                let name = match index.checked_sub(1).map(|i| tokens[i]) {
+                    Some((Lexeme::Word, name)) => name.to_owned(),
+                    Some((Lexeme::Quoted, name)) => unquote(dialect, name),
+                    _ => continue,
+                };
+                // A function of a schema is not the built-in one.
+                let qualified = index >= 2 && tokens[index - 2] == (Lexeme::Symbol, ".");
+                anyhow::ensure!(
+                    !qualified
+                        && CONDITION_KEYWORDS
+                            .iter()
+                            .chain(CONDITION_FUNCTIONS)
+                            .any(|c| c.eq_ignore_ascii_case(&name)),
+                    "filter_condition_function [{}]",
+                    shown(&name)
+                );
+            }
+            _ => {}
+        }
+    }
+    anyhow::ensure!(depth == 0, "filter_condition_parentheses");
+    Ok(format!("({text})"))
+}
 pub fn quote_identifier(dialect: &Dialect, name: &str) -> anyhow::Result<String> {
     anyhow::ensure!(
         !name.is_empty() && name.len() <= 256 && !name.chars().any(|c| c == '\0' || c.is_control()),
@@ -617,6 +774,122 @@ pub fn redact_sql(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn enum_and_set_values_are_read_from_the_type() {
+        assert_eq!(
+            choices("enum('active','pending','it''s, (odd)')"),
+            Some((
+                false,
+                vec!["active".into(), "pending".into(), "it's, (odd)".into()]
+            ))
+        );
+        assert_eq!(
+            choices("SET('a','b')"),
+            Some((true, vec!["a".into(), "b".into()]))
+        );
+        assert_eq!(
+            choices(r"enum('back\\slash','\'quoted\'')"),
+            Some((false, vec![r"back\slash".into(), "'quoted'".into()]))
+        );
+        for other in ["varchar(20)", "enum(", "enum('a'", "enum(a,b)", "text"] {
+            assert_eq!(choices(other), None, "{other}");
+        }
+    }
+    #[test]
+    fn a_typed_condition_is_one_expression_on_the_rows() {
+        let typed = |dialect: &Dialect, text: &str| {
+            typed_condition(dialect, text).map_err(|error| error.to_string())
+        };
+        // What people write, each in the quotes of its engine.
+        assert_eq!(
+            typed(&MYSQL, " `id`=19 or secret is null ").unwrap(),
+            "(`id`=19 or secret is null)"
+        );
+        for (dialect, text) in [
+            (&POSTGRES, "\"id\" = 19 OR secret IS NULL"),
+            (
+                &POSTGRES,
+                "LOWER(name) LIKE 'a%' AND id IN (1, 2) AND created::date > '2024-01-01'",
+            ),
+            (
+                &POSTGRES,
+                "EXTRACT(YEAR FROM created) = 2024 AND CAST(price AS NUMERIC(10, 2)) > 5",
+            ),
+            (
+                &SQLITE,
+                "name = 'a; b -- c /* d */ (' AND coalesce(note, '') <> ''",
+            ),
+            (
+                &MYSQL,
+                "note = \"it's\" OR (a > 1 AND (b < 2 OR c IS NOT NULL))",
+            ),
+        ] {
+            assert!(typed(dialect, text).is_ok(), "{text}");
+        }
+        for (dialect, text, code) in [
+            (&SQLITE, "   ", "filter_condition_empty"),
+            (
+                &SQLITE,
+                "id = 1; DROP TABLE a",
+                "filter_condition_statements",
+            ),
+            (
+                &SQLITE,
+                "id = 1 -- AND secret IS NULL",
+                "filter_condition_comment",
+            ),
+            (&SQLITE, "id = 1 /* x */", "filter_condition_comment"),
+            (&MYSQL, "id = 1 # x", "filter_condition_comment"),
+            // MySQL runs the text of `/*! … */`.
+            (
+                &MYSQL,
+                "id = 1 /*!50000 OR 1=1 */",
+                "filter_condition_comment",
+            ),
+            (&SQLITE, "name = 'x", "filter_condition_unterminated"),
+            (&SQLITE, "(id = 1", "filter_condition_parentheses"),
+            // Closing early would leave the parentheses the condition goes in.
+            (&SQLITE, "id = 1) OR (1 = 1", "filter_condition_parentheses"),
+            (
+                &SQLITE,
+                "id IN (SELECT id FROM b)",
+                "filter_condition_word [SELECT]",
+            ),
+            (
+                &POSTGRES,
+                "id IN (TABLE b)",
+                "filter_condition_word [TABLE]",
+            ),
+            (
+                &POSTGRES,
+                "pg_sleep(10) IS NULL",
+                "filter_condition_function [pg_sleep]",
+            ),
+            (
+                &POSTGRES,
+                "\"pg_sleep\"(10) IS NULL",
+                "filter_condition_function [pg_sleep]",
+            ),
+            (
+                &POSTGRES,
+                "id = nextval('s')",
+                "filter_condition_function [nextval]",
+            ),
+            (
+                &POSTGRES,
+                "public.lower(name) = 'a'",
+                "filter_condition_function [lower]",
+            ),
+            (&MYSQL, "SLEEP (5) = 0", "filter_condition_function [SLEEP]"),
+        ] {
+            assert_eq!(typed(dialect, text).unwrap_err(), code, "{text}");
+        }
+        // Too long a condition is refused before it is read.
+        assert_eq!(
+            typed(&SQLITE, &"a = 1 OR ".repeat(600)).unwrap_err(),
+            "filter_condition_too_long"
+        );
+    }
     #[test]
     fn statements_are_found_by_where_the_cursor_is() {
         let sql = "  SELECT 1;\n\nSELECT ';' ; -- x;\nSELECT 3  ";

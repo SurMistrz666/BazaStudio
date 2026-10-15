@@ -148,9 +148,135 @@ pub fn line_of(text: &str, chars: usize) -> usize {
     text.chars().take(chars).filter(|c| *c == '\n').count()
 }
 
+/// The most names offered at once while a condition is typed.
+pub const MAX_HINTS: usize = 8;
+
+/// What a name offered while a condition is typed stands for.
+#[derive(Clone, Debug, PartialEq)]
+pub enum HintKind {
+    /// A column of the table, with its type.
+    Column(String),
+    Function,
+    Keyword,
+}
+
+/// The name being typed right before `cursor`: where it starts and its text.
+/// `None` inside quoted text, where a name is not wanted.
+pub fn word_before(text: &str, cursor: usize) -> Option<(usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let before = &chars[..cursor];
+    if before.iter().filter(|c| **c == '\'').count() % 2 == 1 {
+        return None;
+    }
+    let start = before
+        .iter()
+        .rposition(|c| !(c.is_alphanumeric() || *c == '_'))
+        .map_or(0, |i| i + 1);
+    (start < cursor).then(|| (start, before[start..].iter().collect()))
+}
+
+/// Names that complete `word`: the columns of the table first, then
+/// functions and keywords in alphabetical order. A function comes with its
+/// parenthesis and a keyword with a space, written in lower case when the
+/// word is. A name already typed in full is not offered.
+pub fn condition_hints(
+    word: &str,
+    columns: &[(String, String)],
+    functions: &[&str],
+    keywords: &[&str],
+) -> Vec<(String, HintKind)> {
+    let typed = word.to_lowercase();
+    let starts = |name: &str| {
+        let name = name.to_lowercase();
+        name.starts_with(&typed) && name != typed
+    };
+    let case = |name: &str| {
+        if word.chars().any(char::is_uppercase) {
+            name.to_owned()
+        } else {
+            name.to_lowercase()
+        }
+    };
+    let mut words = functions
+        .iter()
+        .filter(|name| starts(name))
+        .map(|name| (format!("{}(", case(name)), HintKind::Function))
+        .chain(
+            keywords
+                .iter()
+                .filter(|name| starts(name))
+                .map(|name| (format!("{} ", case(name)), HintKind::Keyword)),
+        )
+        .collect::<Vec<_>>();
+    words.sort_by(|a, b| a.0.cmp(&b.0));
+    columns
+        .iter()
+        .filter(|(name, _)| starts(name))
+        .map(|(name, data_type)| (name.clone(), HintKind::Column(data_type.clone())))
+        .chain(words)
+        .take(MAX_HINTS)
+        .collect()
+}
+
+/// Put `insert` in place of the characters `range`. Returns the new text and
+/// the character position right after the insert.
+pub fn replace_chars(text: &str, range: Range<usize>, insert: &str) -> (String, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let end = range.end.min(chars.len());
+    let start = range.start.min(end);
+    let mut out: String = chars[..start].iter().collect();
+    out.push_str(insert);
+    let cursor = out.chars().count();
+    out.extend(&chars[end..]);
+    (out, cursor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_are_offered_for_the_word_at_the_cursor() {
+        let text = "id = 19 or sta";
+        assert_eq!(word_before(text, 14), Some((11, "sta".into())));
+        assert_eq!(word_before(text, 5), None);
+        // Inside quoted text a name is not wanted.
+        assert_eq!(word_before("name = 'Cus", 11), None);
+        assert_eq!(
+            word_before("name = 'a' and st", 17),
+            Some((15, "st".into()))
+        );
+        let columns = [
+            ("status".to_owned(), "text".to_owned()),
+            ("id".to_owned(), "integer".to_owned()),
+        ];
+        let functions = ["SUBSTR", "STRFTIME", "LOWER"];
+        let keywords = ["IS NULL", "IN"];
+        let names = |word: &str| {
+            condition_hints(word, &columns, &functions, &keywords)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names("st"), ["status", "strftime("]);
+        assert_eq!(names("S"), ["status", "STRFTIME(", "SUBSTR("]);
+        assert_eq!(names("i"), ["id", "in ", "is null "]);
+        // Typed in full: nothing left to offer.
+        assert!(names("id").is_empty());
+        assert_eq!(
+            condition_hints("st", &columns, &functions, &keywords)[0].1,
+            HintKind::Column("text".into())
+        );
+        assert_eq!(
+            replace_chars(text, 11..14, "status"),
+            ("id = 19 or status".into(), 17)
+        );
+        assert_eq!(
+            replace_chars("lo(x)", 0..2, "lower("),
+            ("lower((x)".into(), 6)
+        );
+    }
 
     #[test]
     fn lines_are_commented_and_uncommented() {

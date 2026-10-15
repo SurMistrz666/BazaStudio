@@ -767,6 +767,13 @@ impl StudioApp {
             self.edit_connection(connection.id);
             ui.close();
         }
+        if ui
+            .button(l("Duplikuj połączenie", "Duplicate connection"))
+            .clicked()
+        {
+            self.duplicate_connection(connection.id);
+            ui.close();
+        }
         if connected {
             if ui
                 .add_enabled(

@@ -1,11 +1,24 @@
 //! Changes typed into a table's grid wait there until they are saved, as in
 //! the database tools people know: an edited cell is marked, a new row is a
-//! row at the end of the grid, and ✓ (Mod+S) writes everything in one go
-//! while ✕ leaves it. Mod+Z takes the waiting changes back one by one.
+//! row at the end of the grid, and ✓ (Mod+S) shows what is about to be
+//! written and, once confirmed, writes everything in one go, while ✕ leaves
+//! it. Mod+Z takes the waiting changes back one by one.
 use super::*;
 
 /// The tab, its database, the changes to make and how to take each back.
 type PreparedSave = (Uuid, Database, Vec<RowChange>, Vec<Option<RowChange>>);
+
+/// What ✓ or Mod+S is about to write, waiting for "Zapisz".
+pub(super) struct SaveConfirm {
+    pub tab: Uuid,
+    /// New rows.
+    pub inserts: usize,
+    /// Changed cells, and the rows they are in.
+    pub cells: usize,
+    pub rows: usize,
+    /// The statements, as the history will show them.
+    pub statements: Vec<String>,
+}
 
 impl StudioApp {
     /// Put new values into cells of a tab's grid, to be saved later: `None`
@@ -118,111 +131,63 @@ impl StudioApp {
         tab.scroll_to = Some(row);
     }
 
-    /// ✓ or Mod+S: write every waiting change of a tab in one go.
-    pub(super) fn apply_staged(&mut self, index: usize) {
+    /// ✓ or Mod+S: show what is about to be written and ask first.
+    pub(super) fn ask_save(&mut self, index: usize) {
+        if !self.take_cell_editor(index) {
+            return;
+        }
+        match self.prepare_staged(index) {
+            Ok((_, _, changes, _)) if changes.is_empty() => self.discard_staged(index),
+            Ok((id, db, changes, _)) => {
+                let tab = &self.tabs[index];
+                let rows = tab
+                    .pending
+                    .keys()
+                    .filter(|(r, _)| !tab.added.contains(r))
+                    .map(|(r, _)| *r)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len();
+                let inserts = changes
+                    .iter()
+                    .filter(|c| matches!(c, RowChange::InsertRow { .. }))
+                    .count();
+                self.save_confirm = Some(SaveConfirm {
+                    tab: id,
+                    inserts,
+                    cells: changes.len() - inserts,
+                    rows,
+                    statements: changes
+                        .iter()
+                        .map(|change| db.change_text(change).unwrap_or_default())
+                        .collect(),
+                });
+            }
+            Err(error) => self.notify(error.to_string(), true),
+        }
+    }
+
+    /// Put the value of an open cell editor of this tab among its waiting
+    /// changes. Says why and returns `false` when the value is refused.
+    fn take_cell_editor(&mut self, index: usize) -> bool {
         if let Some(editor) = self.cell_editor.take() {
             if editor.tab == self.tabs[index].id {
                 if let Err(error) = self.commit_cell(editor) {
                     self.notify(error, true);
-                    return;
+                    return false;
                 }
             } else {
                 self.cell_editor = Some(editor);
             }
         }
-        let prepared = (|| -> anyhow::Result<PreparedSave> {
-            let tab = &self.tabs[index];
-            let result = tab
-                .result
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("result_changed_reload_required"))?;
-            let table = tab
-                .table
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("result_read_only"))?;
-            let db = tab
-                .connection
-                .and_then(|id| self.databases.get(&id))
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("connection_unavailable"))?;
-            let key_names: Vec<String> = tab
-                .columns
-                .iter()
-                .filter(|c| c.primary_key)
-                .map(|c| c.name.clone())
-                .collect();
-            let mut changes = Vec::new();
-            let mut inverses = Vec::new();
-            // New rows first, in their order, with the values typed into them.
-            for &r in &tab.added {
-                let values: Vec<(String, Cell)> = result
-                    .columns
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(c, column)| {
-                        tab.pending
-                            .get(&(r, c))
-                            .map(|v| (column.name.clone(), v.clone()))
-                    })
-                    .collect();
-                if values.is_empty() {
-                    continue;
-                }
-                let change = RowChange::InsertRow {
-                    table: table.clone(),
-                    values,
-                };
-                inverses.push(inverse_change(&change, None, &key_names));
-                changes.push(change);
-            }
-            // Changed records, row by row: the other columns first, found by
-            // the key the row has; then the key columns, each found by the
-            // key as the ones before it left it.
-            let rows: std::collections::BTreeSet<usize> = tab
-                .pending
-                .keys()
-                .map(|(r, _)| *r)
-                .filter(|r| !tab.added.contains(r))
-                .collect();
-            for r in rows {
-                let row = &result.rows[r];
-                let mut key = key_names
-                    .iter()
-                    .map(|name| {
-                        let i = result
-                            .columns
-                            .iter()
-                            .position(|v| &v.name == name)
-                            .ok_or_else(|| anyhow::anyhow!("primary_key_required"))?;
-                        Ok((name.clone(), row[i].clone()))
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                anyhow::ensure!(!key.is_empty(), "primary_key_required");
-                let mut cells: Vec<(usize, &Cell)> = tab
-                    .pending
-                    .range((r, 0)..=(r, usize::MAX))
-                    .map(|(&(_, c), v)| (c, v))
-                    .collect();
-                cells.sort_by_key(|(c, _)| key_names.contains(&result.columns[*c].name));
-                for (c, new) in cells {
-                    let column = result.columns[c].name.clone();
-                    let change = RowChange::UpdateCell {
-                        table: table.clone(),
-                        column: column.clone(),
-                        old: row[c].clone(),
-                        new: new.clone(),
-                        key: key.clone(),
-                    };
-                    inverses.push(inverse_change(&change, None, &[]));
-                    changes.push(change);
-                    if let Some(part) = key.iter_mut().find(|(name, _)| *name == column) {
-                        part.1 = new.clone();
-                    }
-                }
-            }
-            Ok((tab.id, db, changes, inverses))
-        })();
-        match prepared {
+        true
+    }
+
+    /// Write every waiting change of a tab in one go, once "Zapisz" said so.
+    pub(super) fn apply_staged(&mut self, index: usize) {
+        if !self.take_cell_editor(index) {
+            return;
+        }
+        match self.prepare_staged(index) {
             Ok((_, _, changes, _)) if changes.is_empty() => {
                 self.discard_staged(index);
             }
@@ -245,6 +210,101 @@ impl StudioApp {
             }
             Err(error) => self.notify(error.to_string(), true),
         }
+    }
+
+    /// The waiting changes of a tab as changes of records: new rows first,
+    /// then the changed cells, row by row.
+    fn prepare_staged(&self, index: usize) -> anyhow::Result<PreparedSave> {
+        let tab = &self.tabs[index];
+        let result = tab
+            .result
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("result_changed_reload_required"))?;
+        let table = tab
+            .table
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("result_read_only"))?;
+        let db = tab
+            .connection
+            .and_then(|id| self.databases.get(&id))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("connection_unavailable"))?;
+        let key_names: Vec<String> = tab
+            .columns
+            .iter()
+            .filter(|c| c.primary_key)
+            .map(|c| c.name.clone())
+            .collect();
+        let mut changes = Vec::new();
+        let mut inverses = Vec::new();
+        // New rows first, in their order, with the values typed into them.
+        for &r in &tab.added {
+            let values: Vec<(String, Cell)> = result
+                .columns
+                .iter()
+                .enumerate()
+                .filter_map(|(c, column)| {
+                    tab.pending
+                        .get(&(r, c))
+                        .map(|v| (column.name.clone(), v.clone()))
+                })
+                .collect();
+            if values.is_empty() {
+                continue;
+            }
+            let change = RowChange::InsertRow {
+                table: table.clone(),
+                values,
+            };
+            inverses.push(inverse_change(&change, None, &key_names));
+            changes.push(change);
+        }
+        // Changed records, row by row: the other columns first, found by
+        // the key the row has; then the key columns, each found by the
+        // key as the ones before it left it.
+        let rows: std::collections::BTreeSet<usize> = tab
+            .pending
+            .keys()
+            .map(|(r, _)| *r)
+            .filter(|r| !tab.added.contains(r))
+            .collect();
+        for r in rows {
+            let row = &result.rows[r];
+            let mut key = key_names
+                .iter()
+                .map(|name| {
+                    let i = result
+                        .columns
+                        .iter()
+                        .position(|v| &v.name == name)
+                        .ok_or_else(|| anyhow::anyhow!("primary_key_required"))?;
+                    Ok((name.clone(), row[i].clone()))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            anyhow::ensure!(!key.is_empty(), "primary_key_required");
+            let mut cells: Vec<(usize, &Cell)> = tab
+                .pending
+                .range((r, 0)..=(r, usize::MAX))
+                .map(|(&(_, c), v)| (c, v))
+                .collect();
+            cells.sort_by_key(|(c, _)| key_names.contains(&result.columns[*c].name));
+            for (c, new) in cells {
+                let column = result.columns[c].name.clone();
+                let change = RowChange::UpdateCell {
+                    table: table.clone(),
+                    column: column.clone(),
+                    old: row[c].clone(),
+                    new: new.clone(),
+                    key: key.clone(),
+                };
+                inverses.push(inverse_change(&change, None, &[]));
+                changes.push(change);
+                if let Some(part) = key.iter_mut().find(|(name, _)| *name == column) {
+                    part.1 = new.clone();
+                }
+            }
+        }
+        Ok((tab.id, db, changes, inverses))
     }
 
     /// ✕: leave every waiting change and remove the new rows.

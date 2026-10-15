@@ -119,6 +119,104 @@ impl StudioApp {
         let p = self.palette();
         let en = self.en();
         let l = |pl: &'static str, english: &'static str| if en { english } else { pl };
+        // Drawn after the connection editor, so it stays above it.
+        if self.copy_key_notice {
+            let mut ok = false;
+            let dialog = widgets::dialog(
+                ctx,
+                &p,
+                "copy_key_notice",
+                l(
+                    "Klucz serwera SSH nie został skopiowany",
+                    "The SSH server key was not copied",
+                ),
+                440.0,
+                l("Zamknij", "Close"),
+                |ui| {
+                    widgets::dialog_body(ui, |ui| {
+                        widgets::help(
+                            ui,
+                            &p,
+                            l(
+                                "Kopia zapamięta klucz serwera SSH przy pierwszym połączeniu. Jeśli masz odcisk klucza od administratora serwera, wpisz go na karcie SSH w części „Zaawansowane: klucz serwera”.",
+                                "The copy remembers the key of the SSH server on its first connection. If the server administrator gave you the key fingerprint, enter it on the SSH tab under \"Advanced: server key\".",
+                            ),
+                        );
+                    });
+                    widgets::dialog_footer(ui, &p, |ui| {
+                        widgets::right(ui, |ui| {
+                            ok = Btn::primary("OK").min_width(84.0).show(ui, &p).clicked();
+                        });
+                    });
+                },
+            );
+            if ok || dialog.close {
+                self.copy_key_notice = false;
+            }
+        }
+        if let Some(confirm) = self.save_confirm.take() {
+            let index = self.tabs.iter().position(|tab| tab.id == confirm.tab);
+            let mut parts = Vec::new();
+            if confirm.inserts > 0 {
+                parts.push(if en {
+                    format!("New rows: {}", confirm.inserts)
+                } else {
+                    format!("Nowe wiersze: {}", confirm.inserts)
+                });
+            }
+            if confirm.cells > 0 {
+                parts.push(if en {
+                    format!("Changed cells: {} in {} rows", confirm.cells, confirm.rows)
+                } else {
+                    format!(
+                        "Zmienione komórki: {} (wiersze: {})",
+                        confirm.cells, confirm.rows
+                    )
+                });
+            }
+            let (mut save, mut cancel) = (false, false);
+            let dialog = widgets::dialog(
+                ctx,
+                &p,
+                "save_changes",
+                l("Zapisać zmiany?", "Save the changes?"),
+                600.0,
+                l("Zamknij", "Close"),
+                |ui| {
+                    widgets::dialog_body(ui, |ui| {
+                        widgets::subheading(ui, &p, &parts.join(" · "));
+                        egui::ScrollArea::vertical()
+                            .max_height(240.0)
+                            .show(ui, |ui| {
+                                for statement in &confirm.statements {
+                                    ui.label(
+                                        RichText::new(statement).monospace().size(p.code() - 1.0),
+                                    );
+                                }
+                            });
+                    });
+                    widgets::dialog_footer(ui, &p, |ui| {
+                        widgets::right(ui, |ui| {
+                            save = Btn::primary(l("Zapisz", "Save"))
+                                .min_width(84.0)
+                                .show(ui, &p)
+                                .clicked();
+                            cancel = Btn::new(l("Anuluj", "Cancel"))
+                                .min_width(84.0)
+                                .show(ui, &p)
+                                .clicked();
+                        });
+                    });
+                },
+            );
+            // Mod+S, then Enter: the keyboard alone saves.
+            save |= ctx.input(|i| i.key_pressed(egui::Key::Enter));
+            match index {
+                Some(index) if save => self.apply_staged(index),
+                Some(_) if !cancel && !dialog.close => self.save_confirm = Some(confirm),
+                _ => {}
+            }
+        }
         if let Some(id) = self.connection_delete {
             let name = self
                 .connection_name(id)
@@ -366,6 +464,11 @@ impl StudioApp {
             return;
         }
         let column = result.columns[e.column].name.clone();
+        let choices = tab
+            .columns
+            .iter()
+            .find(|info| info.name == column)
+            .and_then(|info| sql::choices(&info.data_type));
         let pk: Vec<_> = tab
             .columns
             .iter()
@@ -409,6 +512,26 @@ impl StudioApp {
                             e.row + 1
                         ),
                     );
+                    // The values of an ENUM or a SET column, to click.
+                    if let Some((multiple, values)) = &choices {
+                        ui.horizontal_wrapped(|ui| {
+                            for (index, value) in values.iter().enumerate() {
+                                let on = if *multiple {
+                                    e.value.split(',').any(|v| v == value)
+                                } else {
+                                    e.value == *value
+                                };
+                                if ui.selectable_label(on, value).clicked() {
+                                    e.null = false;
+                                    e.value = if *multiple {
+                                        super::results::toggle_choice(values, &e.value, index)
+                                    } else {
+                                        value.clone()
+                                    };
+                                }
+                            }
+                        });
+                    }
                     ui.add_enabled(
                         !e.null,
                         TextEdit::multiline(&mut e.value)

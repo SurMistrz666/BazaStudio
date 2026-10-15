@@ -31,9 +31,11 @@ use zeroize::Zeroize;
 mod builder_view;
 mod connection_dialog;
 mod connections_view;
+mod design_extras;
 mod design_view;
 mod dialogs;
 mod history_view;
+mod key_tree;
 mod lock;
 mod monitor_view;
 mod objects_view;
@@ -47,6 +49,7 @@ mod sql_view;
 mod staged;
 mod table_view;
 mod transfer_view;
+mod value_view;
 
 pub use qa::{QaOptions, finished as qa_finished, watchdog as qa_watchdog};
 
@@ -157,8 +160,22 @@ struct QueryTab {
     columns: Vec<ColumnInfo>,
     filter_column: String,
     filter_value: String,
+    /// The filter field holds a condition in SQL, not text to search for.
+    filter_sql: bool,
+    /// The names offered at the cursor while a condition is typed.
+    filter_hints: table_view::FilterHints,
+    /// Columns of the result the grid does not show, by name.
+    hidden_columns: std::collections::BTreeSet<String>,
+    /// What the list of columns to show is narrowed to.
+    column_search: String,
+    /// The tree of the keys of a key-value store is beside the grid.
+    key_tree: bool,
+    /// Categories of that tree that are folded, by their prefix.
+    folded_keys: std::collections::BTreeSet<String>,
     order_column: String,
     descending: bool,
+    /// Further columns the rows are ordered by, after `order_column`.
+    then_by: Vec<(String, bool)>,
     page: u64,
     /// Records per page chosen for this tab; `None` follows the preferences.
     page_rows: Option<u32>,
@@ -209,8 +226,15 @@ impl QueryTab {
             columns: vec![],
             filter_column: String::new(),
             filter_value: String::new(),
+            filter_sql: false,
+            filter_hints: Default::default(),
+            hidden_columns: Default::default(),
+            column_search: String::new(),
+            key_tree: true,
+            folded_keys: Default::default(),
             order_column: String::new(),
             descending: false,
+            then_by: Vec::new(),
             page: 0,
             page_rows: None,
             selection: None,
@@ -352,8 +376,9 @@ enum Message {
     LockStopped(Result<(), String>),
     /// Server statistics of the connection with this id.
     Monitor(Uuid, Result<QueryResult, String>),
-    /// Columns of the table chosen in the query builder, for this lookup.
-    BuilderColumns(Uuid, Result<Vec<ColumnInfo>, String>),
+    /// Columns of a table on the canvas of the query builder of this
+    /// connection, by `schema.table`.
+    BuilderColumns(Uuid, String, Result<Vec<ColumnInfo>, String>),
     /// A path chosen in a file dialog of the connection editor with this id.
     PathPicked(Uuid, connection_dialog::PathTarget, PathBuf),
     Distribution(Result<Arc<Updater>, String>),
@@ -383,9 +408,24 @@ enum Message {
     DesignColumns(Uuid, Result<(Vec<ColumnInfo>, Option<QueryResult>), String>),
     /// The statements of a design ran (how many), or the first refusal.
     DesignSaved(Uuid, Result<usize, String>),
+    /// The parts of a design beyond its columns, and what the server offers.
+    DesignExtras(
+        Uuid,
+        Result<
+            (
+                Option<baza_core::ddl::mysql::TableExtras>,
+                design_extras::Catalog,
+            ),
+            String,
+        >,
+    ),
+    /// The columns of a table a foreign key of a design points at.
+    DesignRefColumns(Uuid, String, Result<Vec<String>, String>),
     Library(u64, bool, Result<Vec<SavedQuery>, String>),
     GroupsLoaded(u64, Result<(Arc<Groups>, GroupSnapshot), String>),
     GroupSaved(u64, Result<GroupSnapshot, String>),
+    /// The structures bound to columns, read or written.
+    Layouts(Result<Vec<value_view::BlobLayout>, String>),
 }
 struct NewRowEditor {
     tab: Uuid,
@@ -487,22 +527,6 @@ struct CellEditor {
     value: String,
     null: bool,
 }
-struct BuilderUi {
-    /// Hidden tab that runs the built query and holds its result.
-    tab: Uuid,
-    connection: Uuid,
-    table: TableRef,
-    columns: Vec<ColumnInfo>,
-    /// Identity of the running column lookup; later answers are ignored.
-    request: Uuid,
-    loading: bool,
-    /// The column lookup has answered, with columns or with an error.
-    loaded: bool,
-    selected: Vec<String>,
-    aggregate: String,
-    aggregate_column: String,
-    group_column: String,
-}
 struct ProfileExchange {
     id: Uuid,
     importing: bool,
@@ -542,7 +566,7 @@ pub struct StudioApp {
     show_preferences: bool,
     section: Section,
     cell_editor: Option<CellEditor>,
-    builder: Option<BuilderUi>,
+    builder: Option<builder_view::BuilderUi>,
     import: Option<ImportUi>,
     /// Rows of a tab to delete, waiting for confirmation.
     delete_confirm: Option<(Uuid, Vec<usize>)>,
@@ -562,6 +586,14 @@ pub struct StudioApp {
     undo: Vec<(Uuid, Vec<(RowChange, RowChange)>)>,
     redo: Vec<(Uuid, Vec<(RowChange, RowChange)>)>,
     pending_changes: HashMap<Uuid, PendingChanges>,
+    /// Waiting changes of a tab about to be written, shown for confirmation.
+    save_confirm: Option<staged::SaveConfirm>,
+    /// The value shown in "Podgląd wartości".
+    value_view: Option<value_view::ValueView>,
+    /// The values of an ENUM or SET field of a design being edited.
+    design_values: Option<design_extras::ValuesEditor>,
+    /// C and C++ structures bound to columns, from the vault.
+    blob_layouts: Vec<value_view::BlobLayout>,
     /// Waiting changes of a tab sent to the database, kept until it answers.
     staged_backup: HashMap<Uuid, StagedBackup>,
     /// Open tabs of the table designer, and the one on screen.
@@ -655,6 +687,9 @@ pub struct StudioApp {
     group_loading: bool,
     connection_group_save: Option<(u64, Uuid)>,
     connection_form_group: Option<(Uuid, Option<Uuid>)>,
+    /// A copy of a connection was opened without the SSH server key of the
+    /// original: say so over the editor.
+    copy_key_notice: bool,
     /// Code of the failure that kept the vault from opening at start.
     startup_error: Option<String>,
     /// QA only: show the "opening the vault" screen although the vault is open.
@@ -719,6 +754,10 @@ impl StudioApp {
             undo: Vec::new(),
             redo: Vec::new(),
             pending_changes: HashMap::new(),
+            save_confirm: None,
+            value_view: None,
+            design_values: None,
+            blob_layouts: Vec::new(),
             staged_backup: HashMap::new(),
             designs: Vec::new(),
             design_active: 0,
@@ -804,6 +843,7 @@ impl StudioApp {
             group_loading: false,
             connection_group_save: None,
             connection_form_group: None,
+            copy_key_notice: false,
             startup_error: None,
             qa_startup: false,
         };
@@ -1290,6 +1330,9 @@ impl StudioApp {
         };
         let mut tab = QueryTab::new(Some(c));
         tab.kind = TabKind::Table;
+        // A condition in SQL is the filter a table starts with, where the
+        // engine takes one.
+        tab.filter_sql = db.capabilities().condition;
         tab.title = table.name.clone();
         tab.table = Some(table.clone());
         tab.source = Some(table);
@@ -1704,6 +1747,7 @@ impl StudioApp {
                         self.history = h;
                         if !self.locked {
                             self.load_library();
+                            self.load_layouts();
                             self.load_groups();
                             if !self.qa {
                                 self.init_distribution();
@@ -1793,7 +1837,20 @@ impl StudioApp {
                                 tab.pending_log.clear();
                                 tab.result = Some(v);
                             }
-                            Err(e) => tab.error = Some(e),
+                            Err(e) => {
+                                // A page with a typed condition the server
+                                // refuses was most likely refused for it.
+                                let typed = tab
+                                    .page_request
+                                    .as_ref()
+                                    .is_some_and(|page| page.condition.is_some());
+                                tab.error = Some(match e.strip_prefix("database_error") {
+                                    Some(state) if typed => {
+                                        format!("filter_condition_rejected{state}")
+                                    }
+                                    _ => e,
+                                });
+                            }
                         }
                     }
                 }
@@ -1898,6 +1955,10 @@ impl StudioApp {
                         }
                     }
                 }
+                Message::Layouts(r) => match r {
+                    Ok(rows) => self.blob_layouts = rows,
+                    Err(e) => self.notify(e, true),
+                },
                 Message::Library(generation, mutation, r) => {
                     if generation == self.library_generation {
                         match r {
@@ -2082,6 +2143,10 @@ impl StudioApp {
                     }
                 }
                 Message::DesignColumns(request, r) => self.design_loaded(request, r),
+                Message::DesignExtras(request, r) => self.design_extras_loaded(request, r),
+                Message::DesignRefColumns(design, key, r) => {
+                    self.ref_columns_loaded(design, key, r)
+                }
                 Message::DesignSaved(id, r) => self.design_saved(id, r),
                 Message::Details(request, r) => {
                     if let Some(details) = self
@@ -2196,6 +2261,7 @@ impl StudioApp {
                             self.unlock_password.zeroize();
                             self.unlock_code.zeroize();
                             self.load_library();
+                            self.load_layouts();
                             self.load_groups();
                             if !self.qa {
                                 self.init_distribution();
@@ -2281,17 +2347,8 @@ impl StudioApp {
                         }
                     }
                 }
-                Message::BuilderColumns(request, r) => {
-                    let Some(builder) = self.builder.as_mut().filter(|b| b.request == request)
-                    else {
-                        continue;
-                    };
-                    builder.loading = false;
-                    builder.loaded = true;
-                    match r {
-                        Ok(columns) => builder.columns = columns,
-                        Err(e) => self.notify(e, true),
-                    }
+                Message::BuilderColumns(connection, key, r) => {
+                    self.builder_columns(connection, key, r)
                 }
                 Message::Distribution(r) => {
                     self.distribution_busy = false;

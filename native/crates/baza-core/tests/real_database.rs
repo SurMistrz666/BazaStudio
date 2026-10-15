@@ -14,7 +14,7 @@
 use baza_core::{
     builder::{Filter, FilterOp, QueryBuilder},
     database::Database,
-    drivers::{mysql, postgres, sqlite},
+    drivers::{PageRequest, mysql, postgres, sqlite},
     model::{Cell, ConnectionProfile, TableRef, TlsMode},
     sql,
 };
@@ -160,6 +160,32 @@ async fn filters_and_edits(db: &Database, name: &str) {
             "{engine:?} result not editable: {statement}"
         );
     }
+
+    // A condition typed in SQL, read the way "Dane tabeli" reads a page.
+    let typed = |condition: &str| {
+        let mut page = PageRequest::first(table.clone());
+        page.condition = Some(condition.into());
+        page.order_by = Some(("id".into(), false));
+        page
+    };
+    let page = db
+        .read_page(
+            &typed("id = 2 OR name LIKE 'Zielony%' OR amount > 900"),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(&page), [1, 2, 9], "{engine:?}");
+    // Whether it is valid SQL is for the server to say.
+    let refused = db
+        .read_page(&typed("id = = 2"), CancellationToken::new())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.starts_with("database_error"),
+        "{engine:?} {refused}"
+    );
 
     // Filter, then change one cell of the row that was found. The new value
     // ends in a backslash, the hardest thing to put into a literal.

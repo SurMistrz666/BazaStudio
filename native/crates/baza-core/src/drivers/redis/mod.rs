@@ -64,8 +64,10 @@ pub static SPEC: EngineSpec = EngineSpec {
         browse: BrowseModel::Keys,
         schemas: false,
         filter: true,
+        condition: false,
         // Within limits: see `browse::SORT_LIMIT`.
         sort: true,
+        sort_many: false,
         edit_cells: true,
         insert_rows: true,
         delete_rows: true,
