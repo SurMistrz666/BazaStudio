@@ -97,7 +97,7 @@ pub(super) const GROUPS: &[(&str, &str, &[Shortcut])] = &[
                 "Upper, lower case of the selection",
             ),
             key(
-                "Mod+Shift+F",
+                "Mod+Shift+B",
                 "Formatuj SQL: zaznaczenie albo całość",
                 "Format SQL: the selection or all of it",
             ),
@@ -648,6 +648,25 @@ mod tests {
                 assert!(
                     !shortcut.keys.is_empty() && !shortcut.pl.is_empty() && !shortcut.en.is_empty()
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_of_the_whole_window_means_nothing_else_elsewhere() {
+        // A key of the first group works in every section. Another group
+        // lists it again only where the first one says it means something
+        // else there.
+        let (_, _, general) = GROUPS[0];
+        for shortcut in general.iter().filter(|s| !s.en.contains("below")) {
+            for keys in shortcut.keys.split(", ") {
+                for (_, english, list) in &GROUPS[1..] {
+                    assert!(
+                        list.iter()
+                            .all(|other| other.keys.split(", ").all(|k| k != keys)),
+                        "{keys} is listed in {english} as well"
+                    );
+                }
             }
         }
     }

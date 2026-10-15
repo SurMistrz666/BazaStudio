@@ -20,6 +20,139 @@ const KEYWORDS: &[&str] = &[
     "NULL",
 ];
 
+/// Words that are not names when unquoted in at least one engine. A column
+/// called one of them is quoted when a hint puts it into a condition.
+const RESERVED: &[&str] = &[
+    "ACCESS",
+    "ALL",
+    "ALTER",
+    "AND",
+    "ANY",
+    "ARRAY",
+    "AS",
+    "ASC",
+    "BETWEEN",
+    "BOTH",
+    "BY",
+    "CASE",
+    "CAST",
+    "CHECK",
+    "COLLATE",
+    "COLUMN",
+    "COMMENT",
+    "CONSTRAINT",
+    "CREATE",
+    "CROSS",
+    "CURRENT",
+    "CURRENT_DATE",
+    "CURRENT_TIME",
+    "CURRENT_TIMESTAMP",
+    "CURRENT_USER",
+    "DATE",
+    "DEFAULT",
+    "DELETE",
+    "DESC",
+    "DISTINCT",
+    "DO",
+    "DROP",
+    "ELSE",
+    "END",
+    "EXCEPT",
+    "EXISTS",
+    "FALSE",
+    "FETCH",
+    "FILE",
+    "FOR",
+    "FOREIGN",
+    "FROM",
+    "FULL",
+    "GRANT",
+    "GROUP",
+    "HAVING",
+    "IN",
+    "INDEX",
+    "INNER",
+    "INSERT",
+    "INTERSECT",
+    "INTERVAL",
+    "INTO",
+    "IS",
+    "JOIN",
+    "KEY",
+    "LEADING",
+    "LEFT",
+    "LEVEL",
+    "LIKE",
+    "LIMIT",
+    "LOCALTIME",
+    "LOCALTIMESTAMP",
+    "MODE",
+    "NATURAL",
+    "NOT",
+    "NULL",
+    "NUMBER",
+    "OF",
+    "OFFSET",
+    "ON",
+    "ONLY",
+    "OPTION",
+    "OR",
+    "ORDER",
+    "OUTER",
+    "PRIMARY",
+    "RANGE",
+    "REFERENCES",
+    "RIGHT",
+    "ROW",
+    "ROWNUM",
+    "ROWS",
+    "SELECT",
+    "SESSION",
+    "SESSION_USER",
+    "SET",
+    "SIZE",
+    "SOME",
+    "START",
+    "TABLE",
+    "THEN",
+    "TO",
+    "TOP",
+    "TRAILING",
+    "TRUE",
+    "UID",
+    "UNION",
+    "UNIQUE",
+    "UPDATE",
+    "USER",
+    "USING",
+    "VALUE",
+    "VALUES",
+    "VIEW",
+    "WHEN",
+    "WHERE",
+    "WINDOW",
+    "WITH",
+];
+
+/// A column name as a hint writes it into a condition: as it is when it is
+/// a plain lower-case word, otherwise quoted, because PostgreSQL reads an
+/// unquoted `userId` as `userid` and no engine reads `order` as a name.
+fn condition_name(dialect: &Dialect, name: &str) -> String {
+    let plain = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !RESERVED.iter().any(|word| word.eq_ignore_ascii_case(name));
+    if plain {
+        name.to_owned()
+    } else {
+        sql::quote_identifier(dialect, name).unwrap_or_else(|_| name.to_owned())
+    }
+}
+
 /// The list of names at the cursor of the filter field.
 #[derive(Default)]
 pub(super) struct FilterHints {
@@ -355,13 +488,8 @@ impl StudioApp {
             }
             if let (Some(chosen_hint), Some((range, _))) = (accept, &word) {
                 let (name, kind) = &hints[chosen_hint];
-                // A column whose name is not a plain word is quoted.
                 let insert = match (kind, dialect) {
-                    (HintKind::Column(_), Some(dialect))
-                        if !name.chars().all(|c| c.is_alphanumeric() || c == '_') =>
-                    {
-                        sql::quote_identifier(&dialect, name).unwrap_or_else(|_| name.clone())
-                    }
+                    (HintKind::Column(_), Some(dialect)) => condition_name(&dialect, name),
                     _ => name.clone(),
                 };
                 let (text, at) =
@@ -434,22 +562,26 @@ impl StudioApp {
                         .iter()
                         .map(|(text, _)| Btn::link(text).small().width(ui, &p) + 12.0)
                         .sum();
-                    // Only a grid that cannot be edited says why.
+                    // The font has ✓ but no ✕: × stands for the painted
+                    // icon of the button that discards.
                     let text = if editable && caps.edit_cells && tab_keyed {
-                        None
+                        l(
+                            "Pisz w komórce albo kliknij ją dwukrotnie. Zmiany czekają w siatce: ✓ albo Ctrl+S zapisuje je w bazie, × porzuca. Nagłówek sortuje dane.",
+                            "Type in a cell or double-click it. Changes wait in the grid: ✓ or Ctrl+S saves them to the database, × discards them. A header sorts the data.",
+                        )
                     } else if !caps.edit_cells {
-                        Some(l(
+                        l(
                             "Tylko do odczytu: ta baza nie pozwala zmieniać danych w siatce.",
                             "Read-only: this database does not let the grid change data.",
-                        ))
+                        )
                     } else {
-                        Some(l(
+                        l(
                             "Tylko do odczytu: widok albo tabela bez klucza głównego. Nowy wiersz można dodać, ale istniejącego nie da się wskazać do zmiany ani usunięcia.",
                             "Read-only: a view, or a table without a primary key. New rows can be added, but an existing row cannot be singled out to change or delete.",
-                        ))
+                        )
                     };
                     let room = ui.available_width() - links_width;
-                    if let Some(text) = text.filter(|_| room > 120.0 && has_rows) {
+                    if room > 120.0 && has_rows {
                         let galley = widgets::one_line(
                             ui.painter(),
                             text,
@@ -741,5 +873,34 @@ impl StudioApp {
                     }
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hint_quotes_a_column_name_only_when_it_has_to() {
+        let ansi = Dialect::ANSI;
+        let backticks = Dialect {
+            name_quotes: ('`', '`'),
+            ..Dialect::ANSI
+        };
+        // Plain lower-case words stay as they are.
+        assert_eq!(condition_name(&ansi, "status"), "status");
+        assert_eq!(condition_name(&ansi, "created_at2"), "created_at2");
+        assert_eq!(condition_name(&ansi, "_rev"), "_rev");
+        // Mixed case would be folded, a reserved word is not a name.
+        assert_eq!(condition_name(&ansi, "userId"), "\"userId\"");
+        assert_eq!(condition_name(&ansi, "ID"), "\"ID\"");
+        assert_eq!(condition_name(&ansi, "order"), "\"order\"");
+        assert_eq!(condition_name(&ansi, "user"), "\"user\"");
+        assert_eq!(condition_name(&backticks, "group"), "`group`");
+        // Anything else than a plain word, in the quotes of the engine.
+        assert_eq!(condition_name(&ansi, "first name"), "\"first name\"");
+        assert_eq!(condition_name(&ansi, "2fa"), "\"2fa\"");
+        assert_eq!(condition_name(&ansi, "zażółć"), "\"zażółć\"");
+        assert_eq!(condition_name(&backticks, "a`b"), "`a``b`");
     }
 }

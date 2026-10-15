@@ -701,7 +701,6 @@ impl StudioApp {
             "table-filter" => {
                 if let Some(index) = table_tab {
                     let tab = &mut self.tabs[index];
-                    tab.filter_sql = false;
                     tab.filter_column = "status".into();
                     tab.filter_value = "pend".into();
                     self.browse(index);

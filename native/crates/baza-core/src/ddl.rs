@@ -159,21 +159,27 @@ pub fn type_text(flavor: DdlFlavor, field: &FieldDraft) -> Result<String> {
     Ok(text)
 }
 
-/// A default value as typed: one expression, no statement after it.
-fn default_text(field: &FieldDraft) -> Result<Option<String>> {
+/// A default value as typed: one expression, no statement after it. It is
+/// read as the engine reads SQL, so that a quote it leaves open cannot take
+/// in what the statement says after it (the comment of the column).
+fn default_text(dialect: &Dialect, field: &FieldDraft) -> Result<Option<String>> {
     let text = field.default.trim();
     if text.is_empty() {
         return Ok(None);
     }
-    ensure!(
-        text.len() <= 1000 && !text.contains(';') && !text.contains("--") && !text.contains("/*"),
-        "column_default_invalid"
-    );
+    ensure!(text.len() <= 1000, "column_default_invalid");
+    crate::sql::sql_fragment(dialect, text)
+        .map_err(|_| anyhow::anyhow!("column_default_invalid"))?;
     Ok(Some(text.to_owned()))
 }
 
 /// The definition of a column after its name.
-fn definition(flavor: DdlFlavor, field: &FieldDraft, inline_key: bool) -> Result<String> {
+fn definition(
+    flavor: DdlFlavor,
+    dialect: &Dialect,
+    field: &FieldDraft,
+    inline_key: bool,
+) -> Result<String> {
     let mut text = type_text(flavor, field)?;
     if inline_key {
         // SQLite numbers rows itself only for `INTEGER PRIMARY KEY`.
@@ -192,7 +198,7 @@ fn definition(flavor: DdlFlavor, field: &FieldDraft, inline_key: bool) -> Result
     } else if flavor != DdlFlavor::Postgres && flavor != DdlFlavor::Sqlite {
         text.push_str(" NULL");
     }
-    if let Some(default) = default_text(field)? {
+    if let Some(default) = default_text(dialect, field)? {
         text.push_str(" DEFAULT ");
         text.push_str(&default);
     }
@@ -294,7 +300,7 @@ pub fn create_table_with(
         lines.push(format!(
             "  {} {}",
             quote_identifier(dialect, field.name.trim())?,
-            definition(flavor, field, inline)?
+            definition(flavor, dialect, field, inline)?
         ));
     }
     if !keys.is_empty() && !sqlite_identity {
@@ -384,7 +390,7 @@ pub fn alter_table(
                     "COLUMN "
                 },
                 q(&field.name)?,
-                definition(flavor, &added, false)?
+                definition(flavor, dialect, &added, false)?
             ));
             if flavor == DdlFlavor::Postgres && !field.comment.trim().is_empty() {
                 comments.push(field);
@@ -412,7 +418,7 @@ pub fn alter_table(
                     "ALTER TABLE {target} CHANGE COLUMN {} {} {}",
                     q(&old.name)?,
                     q(&field.name)?,
-                    definition(flavor, &kept, false)?
+                    definition(flavor, dialect, &kept, false)?
                 ));
             }
             DdlFlavor::Postgres => {
@@ -437,7 +443,7 @@ pub fn alter_table(
                     ));
                 }
                 if field.default.trim() != old.default.trim() {
-                    statements.push(match default_text(field)? {
+                    statements.push(match default_text(dialect, field)? {
                         Some(value) => format!(
                             "ALTER TABLE {target} ALTER COLUMN {column} SET DEFAULT {value}"
                         ),
@@ -481,7 +487,7 @@ pub fn alter_table(
                     statements.push(format!(
                         "ALTER TABLE {target} ALTER COLUMN {} {}",
                         q(&field.name)?,
-                        definition(flavor, &plain, false)?
+                        definition(flavor, dialect, &plain, false)?
                     ));
                 }
             }
@@ -583,7 +589,7 @@ mod tests {
         assert!(type_text(DdlFlavor::MySql, &field("x", "varchar", "1x")).is_err());
         let mut bad = field("x", "int", "");
         bad.default = "1; DROP TABLE t".into();
-        assert!(definition(DdlFlavor::MySql, &bad, false).is_err());
+        assert!(definition(DdlFlavor::MySql, &MYSQL, &bad, false).is_err());
         // An ENUM keeps its values, not a length and a scale.
         let status = FieldDraft::from_column(&ColumnInfo {
             name: "status".into(),
@@ -609,10 +615,39 @@ mod tests {
         let mut noted = field("x", "int", "");
         noted.comment = r"it's a\b".into();
         assert!(
-            definition(DdlFlavor::MySql, &noted, false)
+            definition(DdlFlavor::MySql, &MYSQL, &noted, false)
                 .unwrap()
                 .ends_with(r" COMMENT 'it''s a\\b'")
         );
+    }
+
+    #[test]
+    fn a_default_cannot_leave_a_quote_open_for_the_comment() {
+        use crate::drivers::mysql::DIALECT as SERVER;
+        let mut note = field("note", "varchar", "20");
+        // The comment's own quote would close the default's, and the rest
+        // of the comment would be a second statement.
+        note.default = "0 COMMENT 'x".into();
+        note.comment = "'; DROP TABLE users; SELECT '".into();
+        let refused = |field: &FieldDraft| {
+            create_table(
+                DdlFlavor::MySql,
+                &SERVER,
+                &table(),
+                std::slice::from_ref(field),
+            )
+            .unwrap_err()
+            .to_string()
+        };
+        assert_eq!(refused(&note), "column_default_invalid");
+        // Whole only where a backslash escapes, or only where it does not.
+        for default in [r"'a\'", r"'it\'s'"] {
+            note.default = default.into();
+            assert_eq!(refused(&note), "column_default_invalid", "{default}");
+        }
+        note.default = r"'a\\b', 'c'".replace(", 'c'", "");
+        note.comment = "it's".into();
+        assert!(create_table(DdlFlavor::MySql, &SERVER, &table(), &[note]).is_ok());
     }
 
     #[test]

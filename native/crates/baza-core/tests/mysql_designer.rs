@@ -309,6 +309,7 @@ async fn partitioned(db: &Database, schema: &str, name: &str) {
             method: PartitionMethod::Range,
             expression: "id".into(),
             count: String::new(),
+            subpartitioned: false,
             partitions: vec![
                 PartitionDef {
                     name: "low".into(),
@@ -343,7 +344,7 @@ async fn partitioned(db: &Database, schema: &str, name: &str) {
         method: PartitionMethod::Hash,
         expression: "id".into(),
         count: "4".into(),
-        partitions: Vec::new(),
+        ..Default::default()
     };
     run(
         db,

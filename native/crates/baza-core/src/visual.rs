@@ -3,12 +3,21 @@
 //! that become joins, the output columns with their summaries, conditions,
 //! grouping, order and a page. The SQL is written in the dialect of the
 //! connection: names are quoted by it, and the page is written the way it
-//! pages. Conditions and their values are SQL the person types for their
-//! own query, as in the SQL editor.
+//! pages.
+//!
+//! The value of a condition is SQL the person types: a number, a text in
+//! quotes, another column or the list of `IN`. Each value is checked the way
+//! the condition typed into "Dane tabeli" is checked
+//! ([`typed_condition`]): no second statement, no comment, no subquery and no
+//! function that could change data or the server. A value that is more than
+//! one literal or one name stays in parentheses, so it never reaches past
+//! its own condition. Several conditions are each put in parentheses and
+//! joined from the top down: where `AND` meets `OR`, the conditions above
+//! are grouped first, so the query runs in the order the list shows.
 use crate::engine::{Dialect, Paging};
 use crate::model::TableRef;
-use crate::sql::{qualified, quote_identifier};
-use anyhow::{Result, ensure};
+use crate::sql::{Lexeme, lex, qualified, quote_identifier, statement_ranges, typed_condition};
+use anyhow::{Result, bail, ensure};
 
 /// A table of the query and the name it goes by.
 #[derive(Clone, Debug)]
@@ -170,14 +179,17 @@ impl Operator {
 /// One condition of `WHERE` or `HAVING`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Condition {
-    /// Joined to the condition before it with `OR` instead of `AND`.
+    /// Joined to the conditions above it with `OR` instead of `AND`. The
+    /// list is read from the top down: `a OR b AND c` is `(a OR b) AND c`
+    /// (see [`grouping`]).
     pub or: bool,
     pub field: Field,
     /// A summary of the field: in `HAVING`.
     pub aggregate: Option<Aggregate>,
     pub operator: Operator,
     /// SQL as typed: `5`, `'text'`, `1, 2, 3` for `IN`, `1 AND 9` for
-    /// `BETWEEN`, or another column.
+    /// `BETWEEN`, or another column. It is checked before it is written
+    /// (see the module documentation).
     pub value: String,
 }
 
@@ -305,29 +317,47 @@ impl VisualQuery {
         Ok(text)
     }
 
-    fn conditions(&self, dialect: &Dialect, conditions: &[Condition]) -> Result<String> {
-        let mut text = String::new();
-        for (index, condition) in conditions.iter().enumerate() {
-            if index > 0 {
-                text.push_str(if condition.or { " OR " } else { " AND " });
+    /// One condition: its subject, its operator and its checked value.
+    fn condition(&self, dialect: &Dialect, condition: &Condition) -> Result<String> {
+        let subject = self.expression(dialect, &condition.field, condition.aggregate)?;
+        let operator = condition.operator;
+        let value = condition.value.trim();
+        ensure!(
+            !operator.takes_value() || !value.is_empty(),
+            "builder_condition_value"
+        );
+        Ok(match operator {
+            Operator::IsNull | Operator::IsNotNull => format!("{subject} {}", operator.sql()),
+            // The list is checked whole and is written in its own parentheses.
+            Operator::In | Operator::NotIn => format!(
+                "{subject} {} {}",
+                operator.sql(),
+                checked_value(dialect, value)?
+            ),
+            Operator::Between => {
+                let (low, high) = between_bounds(dialect, value)?;
+                format!(
+                    "{subject} BETWEEN {} AND {}",
+                    operand(dialect, low)?,
+                    operand(dialect, high)?
+                )
             }
-            let subject = self.expression(dialect, &condition.field, condition.aggregate)?;
-            let value = condition.value.trim();
-            ensure!(
-                !condition.operator.takes_value() || !value.is_empty(),
-                "builder_condition_value"
-            );
-            text.push_str(&match condition.operator {
-                Operator::IsNull | Operator::IsNotNull => {
-                    format!("{subject} {}", condition.operator.sql())
-                }
-                Operator::In | Operator::NotIn => {
-                    format!("{subject} {} ({value})", condition.operator.sql())
-                }
-                other => format!("{subject} {} {value}", other.sql()),
-            });
-        }
-        Ok(text)
+            other => format!("{subject} {} {}", other.sql(), operand(dialect, value)?),
+        })
+    }
+
+    /// The conditions of `WHERE` or `HAVING`: each in parentheses when there
+    /// are several, joined from the top down as [`grouping`] shows them.
+    fn conditions(&self, dialect: &Dialect, conditions: &[Condition]) -> Result<String> {
+        let several = conditions.len() > 1;
+        let parts = conditions
+            .iter()
+            .map(|condition| {
+                let text = self.condition(dialect, condition)?;
+                Ok(if several { format!("({text})") } else { text })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(join_top_down(parts, conditions))
     }
 
     /// The order the sources are joined in: the first, then each one related
@@ -350,6 +380,14 @@ impl VisualQuery {
     /// The SELECT, one clause per line.
     pub fn sql(&self, dialect: &Dialect) -> Result<String> {
         ensure!(!self.sources.is_empty(), "builder_no_table");
+        // A table is joined to itself through a second copy with its own
+        // alias; a relation inside one copy would join nothing.
+        ensure!(
+            self.relations
+                .iter()
+                .all(|relation| relation.left.source != relation.right.source),
+            "builder_relation_same_table"
+        );
         let mut lines = Vec::new();
         let outputs = if self.outputs.is_empty() {
             "*".to_owned()
@@ -492,8 +530,117 @@ impl VisualQuery {
                 );
             }
         }
-        Ok(lines.join("\n"))
+        let text = lines.join("\n");
+        // Whatever was typed into the parts, the whole is one statement.
+        ensure!(
+            statement_ranges(dialect, &text)?.len() == 1,
+            "builder_value_statements"
+        );
+        Ok(text)
     }
+}
+
+/// How the conditions are joined, by their numbers from 1 as the list shows
+/// them: `(1 OR 2) AND 3`. The SQL groups them the same way.
+pub fn grouping(conditions: &[Condition]) -> String {
+    join_top_down(
+        (1..=conditions.len()).map(|number| number.to_string()),
+        conditions,
+    )
+}
+
+/// The parts joined by the `AND` or `OR` of their conditions, from the top
+/// down: where the joining word changes, everything above is put in
+/// parentheses first. The word of the first condition is not used.
+fn join_top_down(parts: impl IntoIterator<Item = String>, conditions: &[Condition]) -> String {
+    let mut text = String::new();
+    let mut last = None;
+    for (index, (part, condition)) in parts.into_iter().zip(conditions).enumerate() {
+        if index > 0 {
+            if last.is_some_and(|or| or != condition.or) {
+                text = format!("({text})");
+            }
+            text.push_str(if condition.or { " OR " } else { " AND " });
+            last = Some(condition.or);
+        }
+        text.push_str(&part);
+    }
+    text
+}
+
+/// A typed value checked as [`typed_condition`] checks a condition, and in
+/// parentheses. Its refusals are reported as the builder's own codes.
+fn checked_value(dialect: &Dialect, text: &str) -> Result<String> {
+    ensure!(!text.trim().is_empty(), "builder_condition_value");
+    typed_condition(dialect, text).map_err(|error| {
+        let code = error.to_string();
+        match code.strip_prefix("filter_condition_") {
+            Some(rest) => anyhow::anyhow!("builder_value_{rest}"),
+            None => anyhow::anyhow!(code),
+        }
+    })
+}
+
+/// A value after an operator: checked, and in parentheses unless it is one
+/// literal or one name (`5`, `'text'`, `o.id`), which cannot bind to
+/// anything around it.
+fn operand(dialect: &Dialect, text: &str) -> Result<String> {
+    let checked = checked_value(dialect, text)?;
+    let text = text.trim();
+    Ok(if single_term(dialect, text) {
+        text.to_owned()
+    } else {
+        checked
+    })
+}
+
+/// The text is one literal, or one name with the names it is qualified by.
+fn single_term(dialect: &Dialect, text: &str) -> bool {
+    let mut tokens = Vec::new();
+    let read = lex(dialect, text, |kind, range| {
+        if kind != Lexeme::Space {
+            tokens.push((kind, &text[range]));
+        }
+    });
+    if read.is_err() {
+        return false;
+    }
+    match tokens.as_slice() {
+        [(Lexeme::Literal, _)] => true,
+        names => {
+            names.len() % 2 == 1
+                && names.iter().enumerate().all(|(index, &(kind, token))| {
+                    if index % 2 == 0 {
+                        matches!(kind, Lexeme::Word | Lexeme::Quoted)
+                    } else {
+                        kind == Lexeme::Symbol && token == "."
+                    }
+                })
+        }
+    }
+}
+
+/// The two values of `BETWEEN`, typed as `1 AND 10`: the text on each side of
+/// the one `AND` outside parentheses and quotes.
+fn between_bounds<'a>(dialect: &Dialect, text: &'a str) -> Result<(&'a str, &'a str)> {
+    let mut depth = 0i64;
+    let mut ands = Vec::new();
+    lex(dialect, text, |kind, range| {
+        let token = &text[range.clone()];
+        match kind {
+            Lexeme::Symbol if token == "(" => depth += 1,
+            Lexeme::Symbol if token == ")" => depth -= 1,
+            Lexeme::Word if depth == 0 && token.eq_ignore_ascii_case("AND") => ands.push(range),
+            _ => {}
+        }
+    })
+    .map_err(|_| anyhow::anyhow!("builder_value_unterminated"))?;
+    let [and] = ands.as_slice() else {
+        bail!("builder_between_value");
+    };
+    let (low, high) = (text[..and.start].trim(), text[and.end..].trim());
+    ensure!(!low.is_empty() && !high.is_empty(), "builder_between_value");
+    Ok((low, high))
 }
 
 /// A typed count of rows: empty for none.
@@ -598,7 +745,7 @@ mod tests {
             "SELECT DISTINCT `conf_summon`.`mob`, COUNT(*) AS `n`
 FROM `game`.`conf_summon`
 INNER JOIN `game`.`conf_pet_exp` ON `conf_summon`.`vnum` = `conf_pet_exp`.`exp`
-WHERE `conf_summon`.`prob` BETWEEN 1 AND 50 OR `conf_summon`.`mob` IN (101, 102) AND `conf_pet_exp`.`exp` IS NOT NULL
+WHERE ((`conf_summon`.`prob` BETWEEN 1 AND 50) OR (`conf_summon`.`mob` IN (101, 102))) AND (`conf_pet_exp`.`exp` IS NOT NULL)
 GROUP BY `conf_summon`.`mob`
 HAVING COUNT(*) > 1
 ORDER BY COUNT(*) DESC
@@ -673,6 +820,169 @@ OFFSET 20"
         assert_eq!(
             VisualQuery::default().sql(&MYSQL).unwrap_err().to_string(),
             "builder_no_table"
+        );
+    }
+
+    fn condition(or: bool, column: &str, operator: Operator, value: &str) -> Condition {
+        Condition {
+            or,
+            field: field(0, column),
+            aggregate: None,
+            operator,
+            value: value.into(),
+        }
+    }
+
+    /// The `WHERE` of a query on one table with these conditions.
+    fn where_of(conditions: Vec<Condition>) -> Result<String> {
+        let mut query = VisualQuery::default();
+        query.add_source(table("orders"));
+        query.conditions = conditions;
+        let sql = query.sql(&MYSQL)?;
+        Ok(sql
+            .lines()
+            .find_map(|line| line.strip_prefix("WHERE "))
+            .unwrap_or_default()
+            .to_owned())
+    }
+
+    fn refusal(operator: Operator, value: &str) -> String {
+        where_of(vec![condition(false, "id", operator, value)])
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn a_value_cannot_reach_past_its_condition() {
+        // A second statement, in any operator.
+        for operator in [Operator::Equal, Operator::Like, Operator::In] {
+            assert_eq!(
+                refusal(operator, "1; DELETE FROM orders"),
+                "builder_value_statements"
+            );
+        }
+        assert_eq!(
+            refusal(Operator::Between, "1 AND 5; DROP TABLE orders"),
+            "builder_value_statements"
+        );
+        // A list that closes its parentheses to add a condition of its own.
+        assert_eq!(
+            refusal(Operator::In, "1) OR (1=1"),
+            "builder_value_parentheses"
+        );
+        assert_eq!(
+            refusal(Operator::NotIn, "1)) OR ((1=1"),
+            "builder_value_parentheses"
+        );
+        assert_eq!(
+            refusal(Operator::Equal, "1) OR (1=1"),
+            "builder_value_parentheses"
+        );
+        // Comments, which could hide the rest of the query.
+        assert_eq!(refusal(Operator::Equal, "1 -- x"), "builder_value_comment");
+        assert_eq!(refusal(Operator::Equal, "1 # x"), "builder_value_comment");
+        assert_eq!(refusal(Operator::In, "1 /* x */"), "builder_value_comment");
+        assert_eq!(refusal(Operator::Equal, "'a"), "builder_value_unterminated");
+        // A subquery and a function that does more than compute a value.
+        assert_eq!(
+            refusal(Operator::In, "SELECT id FROM users"),
+            "builder_value_word [SELECT]"
+        );
+        assert_eq!(
+            refusal(Operator::Equal, "SLEEP(5)"),
+            "builder_value_function [SLEEP]"
+        );
+        // A semicolon in a text is text.
+        assert_eq!(
+            where_of(vec![condition(false, "note", Operator::Equal, "'a;b'")]).unwrap(),
+            "`note` = 'a;b'"
+        );
+    }
+
+    #[test]
+    fn a_value_of_more_than_one_term_stays_in_parentheses() {
+        let one = |operator, value: &str| {
+            where_of(vec![condition(false, "id", operator, value)]).unwrap()
+        };
+        assert_eq!(one(Operator::Equal, "5"), "`id` = 5");
+        assert_eq!(one(Operator::Equal, "orders.id"), "`id` = orders.id");
+        assert_eq!(one(Operator::Equal, "`o`.`id`"), "`id` = `o`.`id`");
+        assert_eq!(one(Operator::Less, "-5"), "`id` < (-5)");
+        assert_eq!(one(Operator::Equal, "5 OR 1=1"), "`id` = (5 OR 1=1)");
+        assert_eq!(
+            one(Operator::Like, "LOWER('%A%')"),
+            "`id` LIKE (LOWER('%A%'))"
+        );
+        assert_eq!(one(Operator::In, "1, 2, 3"), "`id` IN (1, 2, 3)");
+        assert_eq!(
+            one(Operator::Between, "1 AND (2 + 3)"),
+            "`id` BETWEEN 1 AND ((2 + 3))"
+        );
+        assert_eq!(
+            one(Operator::Between, "'a AND b' AND 'c'"),
+            "`id` BETWEEN 'a AND b' AND 'c'"
+        );
+        for value in ["1", "1 AND 2 AND 3", "AND 2", "1 AND"] {
+            assert_eq!(
+                refusal(Operator::Between, value),
+                "builder_between_value",
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_and_or_are_grouped_from_the_top_down() {
+        let conditions = vec![
+            condition(false, "a", Operator::Equal, "1"),
+            condition(true, "b", Operator::Equal, "2"),
+            condition(false, "c", Operator::IsNull, ""),
+            condition(true, "d", Operator::Equal, "4"),
+        ];
+        assert_eq!(grouping(&conditions), "((1 OR 2) AND 3) OR 4");
+        assert_eq!(
+            where_of(conditions).unwrap(),
+            "(((`a` = 1) OR (`b` = 2)) AND (`c` IS NULL)) OR (`d` = 4)"
+        );
+        // The same word all the way needs no grouping.
+        let conditions = vec![
+            condition(false, "a", Operator::Equal, "1"),
+            condition(false, "b", Operator::Equal, "2"),
+            condition(false, "c", Operator::Equal, "3"),
+        ];
+        assert_eq!(grouping(&conditions), "1 AND 2 AND 3");
+        assert_eq!(
+            where_of(conditions).unwrap(),
+            "(`a` = 1) AND (`b` = 2) AND (`c` = 3)"
+        );
+        // The word of the first condition joins it to nothing.
+        let conditions = vec![condition(true, "a", Operator::Equal, "1")];
+        assert_eq!(grouping(&conditions), "1");
+        assert_eq!(where_of(conditions).unwrap(), "`a` = 1");
+    }
+
+    #[test]
+    fn a_relation_inside_one_table_is_refused() {
+        let mut query = VisualQuery::default();
+        let a = query.add_source(table("a"));
+        query.add_source(table("b"));
+        query.relations.push(Relation {
+            kind: JoinKind::Inner,
+            left: field(a, "id"),
+            right: field(a, "parent_id"),
+        });
+        assert_eq!(
+            query.sql(&MYSQL).unwrap_err().to_string(),
+            "builder_relation_same_table"
+        );
+        // A second copy of the table joins it to itself.
+        let copy = query.add_source(table("a"));
+        query.relations[0].right = field(copy, "parent_id");
+        assert!(
+            query
+                .sql(&MYSQL)
+                .unwrap()
+                .contains("INNER JOIN `game`.`a` AS `a_2` ON `a`.`id` = `a_2`.`parent_id`")
         );
     }
 }

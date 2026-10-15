@@ -5,7 +5,10 @@
 use super::shortcuts::take_mod;
 use super::*;
 use crate::widgets::Btn;
-use baza_core::ddl::{self, DdlFlavor, FieldDraft, mysql::TableExtras};
+use baza_core::ddl::{
+    self, DdlFlavor, FieldDraft,
+    mysql::{Restore, TableExtras},
+};
 use egui_extras::{Column, TableBuilder};
 
 /// What the designer shows under its toolbar.
@@ -42,8 +45,62 @@ pub(super) struct DesignTab {
     /// The item chosen on a page of the parts beyond the columns.
     pub item: usize,
     pub loading: bool,
+    /// The parts beyond the columns are being read; saving waits for them,
+    /// since what it drops is worked out from them.
+    pub extras_loading: bool,
+    /// A save stopped halfway: the next reading of the parts beyond the
+    /// columns refreshes only what the database has, and what was edited
+    /// stays to be saved again.
+    pub keep_extras: bool,
     pub saving: bool,
     pub request: Uuid,
+}
+
+/// What saving a design runs: its statements in order, and what puts back
+/// the parts they drop and add again when one in between fails.
+pub(super) struct SavePlan {
+    pub statements: Vec<String>,
+    pub restores: Vec<Restore>,
+}
+
+/// What the confirmation before saving looks for in the statements: a
+/// dropped column, index, key, constraint or trigger, another engine (one
+/// such as BLACKHOLE keeps no rows), and partitions made or taken away,
+/// which rebuild the table.
+const DESTRUCTIVE: [&str; 9] = [
+    " DROP COLUMN ",
+    " DROP INDEX ",
+    " DROP FOREIGN KEY ",
+    " DROP CONSTRAINT ",
+    " DROP CHECK ",
+    " DROP PRIMARY KEY",
+    " ENGINE=",
+    " PARTITION BY ",
+    " REMOVE PARTITIONING",
+];
+
+/// Saving asks first: it removes or rebuilds part of the table, or takes
+/// values from an ENUM or a SET field (a server that is not strict empties
+/// the rows that hold one).
+fn needs_confirmation(statements: &[String], before: &[FieldDraft], after: &[FieldDraft]) -> bool {
+    let removes = statements.iter().any(|statement| {
+        statement.starts_with("DROP TRIGGER ")
+            || statement.starts_with("ALTER TABLE ")
+                && DESTRUCTIVE.iter().any(|action| statement.contains(action))
+    });
+    removes
+        || after.iter().any(|field| {
+            let Some(old) = field
+                .original
+                .as_deref()
+                .and_then(|original| before.iter().find(|f| f.name == original))
+            else {
+                return false;
+            };
+            is_choice(&old.data_type)
+                && is_choice(&field.data_type)
+                && old.values.iter().any(|value| !field.values.contains(value))
+        })
 }
 
 /// How the database of a connection writes tables.
@@ -208,6 +265,8 @@ impl StudioApp {
             catalog: Default::default(),
             item: 0,
             loading: false,
+            extras_loading: false,
+            keep_extras: false,
             saving: false,
             request,
         });
@@ -245,6 +304,8 @@ impl StudioApp {
             catalog: Default::default(),
             item: 0,
             loading: true,
+            extras_loading: false,
+            keep_extras: false,
             saving: false,
             request,
         });
@@ -333,7 +394,7 @@ impl StudioApp {
     }
 
     /// The statements saving would run, or why there are none.
-    fn design_statements(&self, design: &DesignTab) -> anyhow::Result<Vec<String>> {
+    fn design_statements(&self, design: &DesignTab) -> anyhow::Result<SavePlan> {
         let db = self
             .databases
             .get(&design.connection)
@@ -341,54 +402,66 @@ impl StudioApp {
         let flavor = flavor_of(db.engine());
         let mut table = design.table.clone();
         table.name = table.name.trim().to_owned();
+        let plain = |statements| SavePlan {
+            statements,
+            restores: Vec::new(),
+        };
         match (flavor, design.new) {
             (DdlFlavor::MySql, true) => {
-                ddl::mysql::create(db.dialect(), &table, &design.fields, &design.extras)
+                ddl::mysql::create(db.dialect(), &table, &design.fields, &design.extras).map(plain)
             }
-            (DdlFlavor::MySql, false) => ddl::mysql::alter(
+            (DdlFlavor::MySql, false) => ddl::mysql::alter_plan(
                 db.dialect(),
                 &table,
                 &design.original,
                 &design.fields,
                 &design.original_extras,
                 &design.extras,
-            ),
-            (_, true) => ddl::create_table(flavor, db.dialect(), &table, &design.fields),
+            )
+            .map(|(statements, restores)| SavePlan {
+                statements,
+                restores,
+            }),
+            (_, true) => ddl::create_table(flavor, db.dialect(), &table, &design.fields).map(plain),
             (_, false) => ddl::alter_table(
                 flavor,
                 db.dialect(),
                 &table,
                 &design.original,
                 &design.fields,
-            ),
+            )
+            .map(plain),
         }
     }
 
-    /// Save: ask first when a column would be dropped, then run.
+    /// Save: ask first when part of the table would be removed or rebuilt,
+    /// then run.
     fn save_design(&mut self, index: usize) {
         let design = &self.designs[index];
         match self.design_statements(design) {
-            Ok(statements) if statements.is_empty() => {
+            Ok(plan) if plan.statements.is_empty() => {
                 let text = self.tr(
                     "Nie ma zmian do zapisania.",
                     "There are no changes to save.",
                 );
                 self.notify(text.into(), false);
             }
-            Ok(statements) => {
+            Ok(plan) => {
                 let id = design.id;
-                if statements.iter().any(|s| s.contains(" DROP COLUMN ")) {
-                    self.design_confirm = Some((id, statements));
+                if needs_confirmation(&plan.statements, &design.original, &design.fields) {
+                    self.design_confirm = Some((id, plan));
                 } else {
-                    self.run_design(id, statements);
+                    self.run_design(id, plan);
                 }
             }
             Err(error) => self.notify(error.to_string(), true),
         }
     }
 
-    /// Run the statements of a design one by one, each written to the history.
-    pub(super) fn run_design(&mut self, id: Uuid, statements: Vec<String>) {
+    /// Run the statements of a design one by one, each written to the
+    /// history. When one fails, what puts back the parts it leaves dropped
+    /// runs as well, as far as it goes, and is written to the history too.
+    pub(super) fn run_design(&mut self, id: Uuid, plan: SavePlan) {
         let Some(design) = self.designs.iter_mut().find(|d| d.id == id) else {
             return;
         };
@@ -404,15 +477,23 @@ impl StudioApp {
         self.track(async move {
             let mut done = 0usize;
             let mut outcome = Ok(());
-            for statement in statements {
+            for (index, statement) in plan.statements.iter().enumerate() {
                 let run = async {
-                    db.query(&statement, CancellationToken::new())
+                    db.query(statement, CancellationToken::new())
                         .await
                         .map(|_| ())
                 };
-                match recorded(vault.clone(), connection, &statement, run).await {
+                match recorded(vault.clone(), connection, statement, run).await {
                     Ok(()) => done += 1,
                     Err(error) => {
+                        for restore in plan.restores.iter().filter(|r| r.needed(index)) {
+                            let run = async {
+                                db.query(&restore.sql, CancellationToken::new())
+                                    .await
+                                    .map(|_| ())
+                            };
+                            let _ = recorded(vault.clone(), connection, &restore.sql, run).await;
+                        }
                         outcome = Err(error);
                         break;
                     }
@@ -452,6 +533,7 @@ impl StudioApp {
                 };
                 design.new = false;
                 design.table.name = design.table.name.trim().to_owned();
+                design.keep_extras = false;
                 design.loading = true;
                 design.request = Uuid::new_v4();
                 let (table, request) = (design.table.clone(), design.request);
@@ -461,8 +543,10 @@ impl StudioApp {
                 self.load_design(connection, table, request);
             }
             Err(error) => {
-                // Part may have been written: show what the table now is.
+                // Part may have been written: show what the table now is,
+                // and keep the parts beyond the columns as edited.
                 let reload = (!design.new).then(|| {
+                    design.keep_extras = true;
                     design.loading = true;
                     design.request = Uuid::new_v4();
                     (design.table.clone(), design.request)
@@ -507,7 +591,7 @@ impl StudioApp {
         let mut extras_action = None;
         let mut open_values = None;
         let design = &mut self.designs[index];
-        let busy = design.loading || design.saving;
+        let busy = design.loading || design.saving || design.extras_loading;
         let (mut save, mut add, mut insert, mut remove, mut key) =
             (false, false, false, false, false);
         let (mut up, mut down, mut open_data) = (false, false, false);
@@ -639,34 +723,36 @@ impl StudioApp {
         if design.page == DesignPage::Sql {
             egui::Frame::NONE
                 .inner_margin(egui::Margin::symmetric(16, 14))
-                .show(ui, |ui| match &preview {
-                    Ok(statements) if statements.is_empty() => {
-                        widgets::help(
-                            ui,
-                            &p,
-                            l(
-                                "Nie ma zmian do zapisania.",
-                                "There are no changes to save.",
-                            ),
-                        );
-                    }
-                    Ok(statements) => {
-                        egui::ScrollArea::both()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                let text = statements
-                                    .iter()
-                                    .map(|s| format!("{s};"))
-                                    .collect::<Vec<_>>()
-                                    .join("\n\n");
-                                let mut job = highlight(&text, p.code() - 0.5, p);
-                                job.wrap.max_width = f32::INFINITY;
-                                ui.add(egui::Label::new(job).selectable(true));
-                            });
-                    }
-                    Err(error) => {
-                        let text = crate::messages::describe(&error.to_string(), en);
-                        widgets::feedback(ui, &p, &text, true);
+                .show(ui, |ui| {
+                    match preview.as_ref().map(|plan| &plan.statements) {
+                        Ok(statements) if statements.is_empty() => {
+                            widgets::help(
+                                ui,
+                                &p,
+                                l(
+                                    "Nie ma zmian do zapisania.",
+                                    "There are no changes to save.",
+                                ),
+                            );
+                        }
+                        Ok(statements) => {
+                            egui::ScrollArea::both()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    let text = statements
+                                        .iter()
+                                        .map(|s| format!("{s};"))
+                                        .collect::<Vec<_>>()
+                                        .join("\n\n");
+                                    let mut job = highlight(&text, p.code() - 0.5, p);
+                                    job.wrap.max_width = f32::INFINITY;
+                                    ui.add(egui::Label::new(job).selectable(true));
+                                });
+                        }
+                        Err(error) => {
+                            let text = crate::messages::describe(&error.to_string(), en);
+                            widgets::feedback(ui, &p, &text, true);
+                        }
                     }
                 });
         } else if design.loading && design.fields.is_empty() {
@@ -923,8 +1009,11 @@ impl StudioApp {
             }
         }
 
-        // The keyboard: Mod+S saves.
-        if !ui.ctx().memory(|m| m.top_modal_layer()).is_some() && take_mod(ui, false, egui::Key::S)
+        // The keyboard: Mod+S saves, as the button does when it is enabled.
+        if !ui.ctx().memory(|m| m.top_modal_layer()).is_some()
+            && take_mod(ui, false, egui::Key::S)
+            && connected
+            && !busy
         {
             save = true;
         }
@@ -987,9 +1076,9 @@ impl StudioApp {
         }
     }
 
-    /// The question before saving drops columns.
+    /// The question before saving removes or rebuilds part of a table.
     pub(super) fn design_confirm_window(&mut self, ctx: &egui::Context) {
-        let Some((id, statements)) = self.design_confirm.take() else {
+        let Some((id, plan)) = self.design_confirm.take() else {
             return;
         };
         let p = self.palette();
@@ -1009,14 +1098,14 @@ impl StudioApp {
                         ui,
                         &p,
                         l(
-                            "Usunięte pola znikną z tabeli razem z danymi. Tej operacji nie można cofnąć.",
-                            "Deleted fields leave the table together with their data. This cannot be undone.",
+                            "Zapis usunie albo przebuduje część tabeli: pola, indeksy, klucze, sprawdzenia, wyzwalacze, wartości pól ENUM i SET, silnik albo partycje. Usuniętych danych nie da się przywrócić.",
+                            "Saving removes or rebuilds parts of the table: fields, indexes, keys, checks, triggers, values of ENUM and SET fields, the engine or the partitions. Removed data cannot be brought back.",
                         ),
                     );
                     egui::ScrollArea::vertical()
                         .max_height(220.0)
                         .show(ui, |ui| {
-                            for statement in &statements {
+                            for statement in &plan.statements {
                                 ui.label(
                                     egui::RichText::new(statement)
                                         .monospace()
@@ -1035,9 +1124,9 @@ impl StudioApp {
             },
         );
         if run {
-            self.run_design(id, statements);
+            self.run_design(id, plan);
         } else if !cancel && !dialog.close {
-            self.design_confirm = Some((id, statements));
+            self.design_confirm = Some((id, plan));
         }
     }
 }
@@ -1061,5 +1150,54 @@ mod tests {
             mysql_default("now()", "DEFAULT_GENERATED", "datetime"),
             "now()"
         );
+    }
+
+    #[test]
+    fn saving_asks_first_when_part_of_the_table_goes() {
+        let statements = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let status = |values: &[&str]| FieldDraft {
+            name: "status".into(),
+            data_type: "enum".into(),
+            values: values.iter().map(|v| (*v).to_owned()).collect(),
+            original: Some("status".into()),
+            ..Default::default()
+        };
+        let before = vec![status(&["new", "paid"])];
+        for statement in [
+            "ALTER TABLE `s`.`t` DROP COLUMN `a`",
+            "ALTER TABLE `s`.`t` DROP INDEX `by_a`",
+            "ALTER TABLE `s`.`t` DROP FOREIGN KEY `fk_a`",
+            "ALTER TABLE `s`.`t` DROP CONSTRAINT `positive`",
+            "ALTER TABLE `s`.`t` DROP PRIMARY KEY, ADD PRIMARY KEY (`b`)",
+            "DROP TRIGGER IF EXISTS `s`.`stamp`",
+            "ALTER TABLE `s`.`t` ENGINE=BLACKHOLE",
+            "ALTER TABLE `s`.`t` PARTITION BY HASH (id) PARTITIONS 4",
+            "ALTER TABLE `s`.`t` REMOVE PARTITIONING",
+        ] {
+            assert!(
+                needs_confirmation(&statements(&[statement]), &before, &before),
+                "{statement}"
+            );
+        }
+        // Adding asks nothing, nor does a new table with its engine.
+        for statement in [
+            "ALTER TABLE `s`.`t` ADD INDEX `by_a` (`a`)",
+            "ALTER TABLE `s`.`t` COMMENT='x'",
+            "CREATE TABLE `s`.`t` (\n  `id` int NULL\n)\nENGINE=InnoDB",
+        ] {
+            assert!(
+                !needs_confirmation(&statements(&[statement]), &before, &before),
+                "{statement}"
+            );
+        }
+        // A value taken from an ENUM empties the rows that hold it.
+        let change =
+            statements(&["ALTER TABLE `s`.`t` CHANGE COLUMN `status` `status` enum('new') NULL"]);
+        assert!(needs_confirmation(&change, &before, &[status(&["new"])]));
+        assert!(!needs_confirmation(
+            &change,
+            &before,
+            &[status(&["new", "paid", "sent"])]
+        ));
     }
 }

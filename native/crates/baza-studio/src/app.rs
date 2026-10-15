@@ -161,6 +161,8 @@ struct QueryTab {
     filter_column: String,
     filter_value: String,
     /// The filter field holds a condition in SQL, not text to search for.
+    /// A table opens with the search; the condition is a choice in the
+    /// list of columns.
     filter_sql: bool,
     /// The names offered at the cursor while a condition is typed.
     filter_hints: table_view::FilterHints,
@@ -599,8 +601,9 @@ pub struct StudioApp {
     /// Open tabs of the table designer, and the one on screen.
     designs: Vec<design_view::DesignTab>,
     design_active: usize,
-    /// Statements of a design waiting for confirmation: they drop columns.
-    design_confirm: Option<(Uuid, Vec<String>)>,
+    /// What saving a design runs, waiting for confirmation: it removes or
+    /// rebuilds part of the table.
+    design_confirm: Option<(Uuid, design_view::SavePlan)>,
     /// "Go to record" (Mod+G): the tab and the number typed so far.
     goto_record: Option<(Uuid, String)>,
     /// The search bar of the SQL editor (Mod+F).
@@ -1330,9 +1333,6 @@ impl StudioApp {
         };
         let mut tab = QueryTab::new(Some(c));
         tab.kind = TabKind::Table;
-        // A condition in SQL is the filter a table starts with, where the
-        // engine takes one.
-        tab.filter_sql = db.capabilities().condition;
         tab.title = table.name.clone();
         tab.table = Some(table.clone());
         tab.source = Some(table);

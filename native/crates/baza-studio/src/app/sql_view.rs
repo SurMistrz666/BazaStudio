@@ -181,7 +181,7 @@ impl StudioApp {
                             "Formatuj SQL: zaznaczenie albo całość",
                             "Format SQL: the selection or all of it"
                         ),
-                        super::shortcuts::keys_text("Mod+Shift+F", en)
+                        super::shortcuts::keys_text("Mod+Shift+B", en)
                     ),
                 )
                 .clicked();
@@ -499,7 +499,9 @@ impl StudioApp {
                 text_change = Some(editor_text::change_case(&tab.sql, selection.clone(), true));
             } else if take_mod(ui, true, egui::Key::L) && !selection.is_empty() {
                 text_change = Some(editor_text::change_case(&tab.sql, selection, false));
-            } else if take_mod(ui, true, egui::Key::F) {
+            } else if take_mod(ui, true, egui::Key::B) {
+                // Mod+Shift+F stays the search of the Connections panel,
+                // which the whole window reads first.
                 beautify = true;
             }
         }

@@ -6,6 +6,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// What separates the parts of a key.
 pub(super) const DELIMITER: char = ':';
+/// Most levels of categories: the rest of a longer key stays in its name.
+/// A key is the user's data, and one of thousands of parts would nest the
+/// tree as deep.
+const MAX_LEVELS: usize = 32;
+
+/// The categories of a key and its own name: at most [`MAX_LEVELS`] parts,
+/// then the rest.
+fn key_parts(key: &str) -> Vec<&str> {
+    key.splitn(MAX_LEVELS + 1, DELIMITER).collect()
+}
 
 /// One line of the tree on screen.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,7 +54,7 @@ pub(super) fn tree_lines<'a>(
 ) -> Vec<TreeLine> {
     let mut root = Node::default();
     for (row, key) in keys {
-        let mut parts: Vec<&str> = key.split(DELIMITER).collect();
+        let mut parts = key_parts(key);
         // The last part is the key itself; the ones before it are categories.
         parts.pop();
         let mut node = &mut root;
@@ -145,7 +155,7 @@ impl StudioApp {
                     // Every category of the page, also the ones not on screen.
                     let mut every = BTreeSet::new();
                     for (_, key) in &keys {
-                        let parts: Vec<&str> = key.split(DELIMITER).collect();
+                        let parts = key_parts(key);
                         for end in 1..parts.len() {
                             every.insert(format!(
                                 "{}{DELIMITER}",
@@ -225,8 +235,11 @@ impl StudioApp {
                             });
                         }
                         TreeKind::Key { row } => {
-                            let key = &keys[*row].1;
-                            let label = key.rsplit(DELIMITER).next().unwrap_or(key);
+                            let Ok(found) = keys.binary_search_by_key(row, |(r, _)| *r) else {
+                                continue;
+                            };
+                            let key = &keys[found].1;
+                            let label = key_parts(key).pop().unwrap_or(key.as_str());
                             if selected == Some(*row) {
                                 painter.rect_filled(rect, 3, p.accent.gamma_multiply(0.3));
                             } else if response.hovered() {
@@ -318,5 +331,14 @@ mod tests {
             lines(&folded),
             ["-klucz (3)", "  +data (2)", "  #2", "+user (1)", "#3"]
         );
+    }
+
+    #[test]
+    fn a_key_of_many_parts_nests_only_so_deep() {
+        let key = ":".repeat(50_000);
+        let lines = tree_lines([(0, key.as_str())].into_iter(), &BTreeSet::new());
+        assert_eq!(lines.len(), MAX_LEVELS + 1);
+        assert_eq!(lines.last().unwrap().depth, MAX_LEVELS);
+        assert_eq!(key_parts(&key).len(), MAX_LEVELS + 1);
     }
 }

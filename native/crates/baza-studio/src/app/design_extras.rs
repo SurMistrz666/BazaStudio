@@ -19,6 +19,8 @@ pub(super) struct Catalog {
     pub charsets: Vec<String>,
     /// Collation and its character set.
     pub collations: Vec<(String, String)>,
+    /// The server is MariaDB; `None` when it did not say its version.
+    pub mariadb: Option<bool>,
     /// Columns of other tables, by `schema.table`.
     pub ref_columns: HashMap<String, Vec<String>>,
     /// Tables whose columns were asked for.
@@ -56,11 +58,24 @@ impl StudioApp {
         let Some(db) = self.databases.get(&connection).cloned() else {
             return;
         };
+        if let Some(design) = self.designs.iter_mut().find(|d| d.request == request) {
+            design.extras_loading = true;
+        }
         let tx = self.tx.clone();
         let ctx = self.ctx.clone();
         self.track(async move {
             let r = async {
-                let mut catalog = Catalog::default();
+                let mariadb = db
+                    .query(mysql::VERSION_QUERY, CancellationToken::new())
+                    .await
+                    .ok()
+                    .and_then(|result| result.rows.into_iter().next())
+                    .and_then(|row| row.first().map(Cell::display))
+                    .map(|version| mysql::is_mariadb(&version));
+                let mut catalog = Catalog {
+                    mariadb,
+                    ..Default::default()
+                };
                 for (index, query) in mysql::CATALOG_QUERIES.iter().enumerate() {
                     // A server that hides a list leaves the field typed.
                     let rows = db
@@ -135,11 +150,19 @@ impl StudioApp {
         let Some(design) = self.designs.iter_mut().find(|d| d.request == request) else {
             return;
         };
+        design.extras_loading = false;
+        let keep = std::mem::take(&mut design.keep_extras);
         match result {
             Ok((extras, catalog)) => {
                 if let Some(extras) = extras {
-                    design.original_extras = extras.clone();
-                    design.extras = extras;
+                    // After a save that stopped halfway what was edited
+                    // stays, to be saved again against what the table has.
+                    if keep {
+                        design.extras.adopt_existing(&extras);
+                    } else {
+                        design.extras = extras.clone();
+                    }
+                    design.original_extras = extras;
                 }
                 // Columns of other tables read before stay.
                 let known = std::mem::take(&mut design.catalog.ref_columns);
@@ -787,12 +810,10 @@ fn foreign_key_editor(
                         };
                         let chosen = key.ref_table == table.name && target_schema == table.schema;
                         if ui.selectable_label(chosen, label).clicked() {
+                            // The schema is named as the database names it
+                            // when the key is read back.
                             key.ref_table = table.name.clone();
-                            key.ref_schema = if table.schema == schema {
-                                String::new()
-                            } else {
-                                table.schema.clone()
-                            };
+                            key.ref_schema = table.schema.clone();
                         }
                     }
                 });
@@ -905,16 +926,16 @@ fn trigger_editor(ui: &mut egui::Ui, p: &theme::Palette, en: bool, trigger: &mut
         &mut trigger.body,
         12,
         l(
-            "SET NEW.kolumna = …; kilka poleceń w BEGIN … END",
-            "SET NEW.column = …; several statements in BEGIN … END",
+            "BEGIN\n  SET NEW.kolumna = …;\n  SET NEW.inna = …;\nEND",
+            "BEGIN\n  SET NEW.column = …;\n  SET NEW.other = …;\nEND",
         ),
     );
     widgets::help(
         ui,
         p,
         l(
-            "NEW to wiersz po zmianie, OLD przed nią. Zmiana wyzwalacza usuwa go i tworzy na nowo.",
-            "NEW is the row after the change, OLD before it. A changed trigger is dropped and created again.",
+            "Treść to jedno polecenie albo blok BEGIN … END, bez DELIMITER i bez kolejnego polecenia po nim. NEW to wiersz po zmianie, OLD przed nią. Zmiana wyzwalacza usuwa go i tworzy na nowo.",
+            "The body is one statement or a BEGIN … END block, without DELIMITER and with no statement after it. NEW is the row after the change, OLD before it. A changed trigger is dropped and created again.",
         ),
     );
 }
@@ -994,7 +1015,11 @@ fn options_editor(
     ui.add_space(4.0);
     widgets::hline(ui, p);
     ui.add_space(4.0);
-    let settings = mysql::engine_options(&options.engine);
+    // What only MariaDB has is left out on a server known to be MySQL.
+    let settings: Vec<&EngineSetting> = mysql::engine_options(&options.engine)
+        .iter()
+        .filter(|setting| !setting.mariadb_only || catalog.mariadb != Some(false))
+        .collect();
     if options.engine.is_empty() {
         widgets::help(
             ui,
@@ -1045,11 +1070,11 @@ fn options_editor(
                     200.0,
                 );
             }
-            SettingValues::Number(max) => {
+            SettingValues::Number(min, max) => {
                 ui.add(
                     widgets::field(p, &mut value)
                         .desired_width(120.0)
-                        .hint_text(format!("0 … {max}")),
+                        .hint_text(format!("{min} … {max}")),
                 );
             }
         });
@@ -1092,6 +1117,16 @@ fn partitions_editor(
         );
     });
     let method = partitioning.method;
+    if partitioning.subpartitioned {
+        widgets::help(
+            ui,
+            p,
+            l(
+                "Partycje tej tabeli są podzielone na podpartycje (SUBPARTITION BY). Projektant ich nie zmienia; może tylko usunąć podział, gdy wybierzesz „Bez partycji”.",
+                "The partitions of this table are divided into subpartitions (SUBPARTITION BY). The designer does not change them; it can only take the partitioning away when you choose “No partitions”.",
+            ),
+        );
+    }
     if method == PartitionMethod::None {
         return;
     }

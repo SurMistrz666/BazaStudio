@@ -8,6 +8,7 @@ use super::*;
 use crate::widgets::Btn;
 use baza_core::visual::{
     Aggregate, Condition, Field, JoinKind, Operator, OrderTerm, Output, Relation, VisualQuery,
+    grouping,
 };
 use eframe::egui::RichText;
 use std::collections::{HashMap, HashSet};
@@ -49,6 +50,13 @@ pub(super) struct BuilderUi {
     /// Columns of the tables, by `schema.table`, and the tables asked for.
     pub columns: HashMap<String, Vec<ColumnInfo>>,
     pub requested: HashSet<String>,
+    /// Tables whose columns could not be read, with the error. They stay
+    /// asked for, so they are not read again on every frame, until the
+    /// person tries again on the canvas or puts the table on it again.
+    failed: HashMap<String, String>,
+    /// The builder's own text field that had the keyboard in the last frame:
+    /// Mod+Enter typed in it runs the query.
+    field_focus: Option<egui::Id>,
     pub page: BuilderPage,
     /// A relation being drawn from this column.
     dragging: Option<Field>,
@@ -62,20 +70,58 @@ fn table_key(table: &TableRef) -> String {
 }
 
 impl BuilderUi {
-    /// The columns of a source, `*` first; none while they are read.
+    /// The names of the columns of a source, `*` first; only `*` while they
+    /// are read, none for a source that is not there.
+    fn column_names(&self, source: usize) -> impl Iterator<Item = &str> {
+        let table = self.query.sources.get(source).map(|s| &s.table);
+        table.map(|_| "*").into_iter().chain(
+            table
+                .and_then(|table| self.columns.get(&table_key(table)))
+                .into_iter()
+                .flatten()
+                .map(|c| c.name.as_str()),
+        )
+    }
+    /// The columns of a source, `*` first; only `*` while they are read.
     fn columns_of(&self, source: usize) -> Vec<String> {
-        let Some(table) = self.query.sources.get(source).map(|s| &s.table) else {
-            return Vec::new();
-        };
-        std::iter::once("*".to_owned())
-            .chain(
-                self.columns
-                    .get(&table_key(table))
-                    .into_iter()
-                    .flatten()
-                    .map(|c| c.name.clone()),
-            )
-            .collect()
+        self.column_names(source).map(str::to_owned).collect()
+    }
+    /// The columns of the source have been read.
+    fn has_columns(&self, source: usize) -> bool {
+        self.query
+            .sources
+            .get(source)
+            .is_some_and(|s| self.columns.contains_key(&table_key(&s.table)))
+    }
+    /// Why the columns of the source could not be read, if they could not.
+    fn columns_failed(&self, source: usize) -> Option<&String> {
+        let source = self.query.sources.get(source)?;
+        self.failed.get(&table_key(&source.table))
+    }
+    /// Rows of the box of a source: its columns, or `*` with the line that
+    /// says they are read or could not be read.
+    fn box_rows(&self, source: usize) -> usize {
+        if self.columns_failed(source).is_some() {
+            3
+        } else if self.has_columns(source) {
+            self.column_names(source).count()
+        } else {
+            2
+        }
+    }
+    /// Read the columns of the table again on the next frame, if reading
+    /// them failed.
+    fn retry_columns(&mut self, table: &TableRef) {
+        let key = table_key(table);
+        if self.failed.remove(&key).is_some() {
+            self.requested.remove(&key);
+        }
+    }
+    /// Note that one of the builder's own text fields has the keyboard.
+    fn note_focus(&mut self, response: &egui::Response) {
+        if response.has_focus() {
+            self.field_focus = Some(response.id);
+        }
     }
     fn label(&self, field: &Field) -> String {
         match self.query.sources.get(field.source) {
@@ -110,6 +156,8 @@ impl BuilderUi {
                 24.0 + (n / 4) as f32 * (HEADER + ROW * MAX_ROWS as f32 + 60.0),
             )
         });
+        // Putting a table on the canvas again also reads its columns again.
+        self.retry_columns(&table);
         self.query.add_source(table);
         self.nodes.push(Node { pos, scroll: 0.0 });
     }
@@ -146,6 +194,8 @@ impl BuilderUi {
 /// What the canvas asks for once drawn.
 enum CanvasAction {
     AddTable(TableRef, egui::Pos2),
+    /// A column was dropped onto a column of its own table.
+    SameTable,
 }
 
 impl StudioApp {
@@ -205,20 +255,25 @@ impl StudioApp {
                 nodes: Vec::new(),
                 columns: HashMap::new(),
                 requested: HashSet::new(),
+                failed: HashMap::new(),
+                field_focus: None,
                 page: BuilderPage::Select,
                 dragging: None,
                 relation_menu: None,
                 table_search: String::new(),
             });
         }
-        if let Some(b) = self.builder.as_mut()
-            && !b
-                .query
+        if let Some(b) = self.builder.as_mut() {
+            if b.query
                 .sources
                 .iter()
                 .any(|s| s.table.schema == table.schema && s.table.name == table.name)
-        {
-            b.add_table(table, None);
+            {
+                // Chosen again: its columns are read again if they failed.
+                b.retry_columns(&table);
+            } else {
+                b.add_table(table, None);
+            }
         }
         self.section = Section::Builder;
         if let Some(index) = self.tabs.iter().position(|t| t.id == tab) {
@@ -264,10 +319,13 @@ impl StudioApp {
         };
         match result {
             Ok(columns) => {
+                b.failed.remove(&key);
                 b.columns.insert(key, columns);
             }
             Err(error) => {
-                b.requested.remove(&key);
+                // The table stays asked for: it is read again only when the
+                // person asks, so the error is shown once.
+                b.failed.insert(key, error.clone());
                 self.notify(error, true);
             }
         }
@@ -312,7 +370,6 @@ impl StudioApp {
             return;
         };
         self.request_builder_columns(&mut b);
-        let tables = self.tables.get(&b.connection).cloned().unwrap_or_default();
         let preview = Self::builder_sql(&b, &dialect);
         let busy = self.tabs[index].busy;
         let (mut run, mut open_editor, mut clear) = (false, false, false);
@@ -349,11 +406,27 @@ impl StudioApp {
                 );
             });
         });
-        if !busy && preview.is_ok() && take_mod(ui, false, egui::Key::Enter) {
+        // Mod+Enter runs the query unless the result grid or its cell editor,
+        // a dialog or a text field outside the builder has the keyboard: in
+        // the grid it opens the larger cell editor.
+        let grid_focused = ui.memory(|m| m.has_focus(egui::Id::new(("grid_keys", b.tab))));
+        let own_field = b
+            .field_focus
+            .take()
+            .is_some_and(|id| ui.memory(|m| m.has_focus(id)));
+        let modal = ui.ctx().memory(|m| m.top_modal_layer()).is_some();
+        let editing = self.cell_editor.as_ref().is_some_and(|e| e.tab == b.tab);
+        let keys_free =
+            !modal && !grid_focused && !editing && (own_field || !ui.ctx().text_edit_focused());
+        if keys_free && !busy && preview.is_ok() && take_mod(ui, false, egui::Key::Enter) {
             run = true;
         }
 
         // The tables of the connection.
+        let tables = self
+            .tables
+            .get(&b.connection)
+            .map_or(&[][..], Vec::as_slice);
         let mut chosen_table = None;
         egui::Panel::left(egui::Id::new("builder_tables"))
             .resizable(true)
@@ -365,7 +438,7 @@ impl StudioApp {
                     .inner_margin(egui::Margin::symmetric(8, 8)),
             )
             .show(ui, |ui| {
-                chosen_table = table_list(ui, &p, en, &mut b, &tables)
+                chosen_table = table_list(ui, &p, en, &mut b, tables)
             });
 
         // The SQL, formatted.
@@ -472,9 +545,12 @@ impl StudioApp {
             });
 
         // The canvas takes the rest.
-        let action = canvas(ui, &p, en, &mut b);
-        if let Some(CanvasAction::AddTable(table, at)) = action {
-            b.add_table(table, Some(at));
+        match canvas(ui, &p, en, &mut b) {
+            Some(CanvasAction::AddTable(table, at)) => b.add_table(table, Some(at)),
+            Some(CanvasAction::SameTable) => {
+                self.notify("builder_relation_same_table".into(), true);
+            }
+            None => {}
         }
         if let Some(table) = chosen_table {
             b.add_table(table, None);
@@ -522,8 +598,8 @@ impl StudioApp {
         let focus = self.focus_connection();
         let tables = focus
             .filter(|id| self.databases.contains_key(id))
-            .and_then(|id| self.tables.get(&id).cloned())
-            .unwrap_or_default();
+            .and_then(|id| self.tables.get(&id))
+            .map_or(&[][..], Vec::as_slice);
         let mut chosen = None;
         let mut action = false;
         egui::Frame::NONE
@@ -582,7 +658,7 @@ impl StudioApp {
                                 l("Tabela…", "Table…"),
                                 240.0,
                                 |ui| {
-                                    for table in &tables {
+                                    for table in tables {
                                         if ui.selectable_label(false, &table.name).clicked() {
                                             chosen = Some(table.clone());
                                         }
@@ -616,23 +692,42 @@ fn table_list(
     tables: &[TableRef],
 ) -> Option<TableRef> {
     let l = |pl: &'static str, english: &'static str| if en { english } else { pl };
-    ui.add(
+    let search = ui.add(
         widgets::field(p, &mut b.table_search)
             .hint_text(l("Szukaj tabeli", "Find a table"))
             .desired_width(f32::INFINITY),
     );
+    b.note_focus(&search);
     ui.add_space(4.0);
-    let needle = b.table_search.to_lowercase();
+    let needle = b.table_search.trim().to_lowercase();
+    // The tables that match, by their place in the list; with nothing
+    // typed, all of them, without a list of their own.
+    let matching: Vec<usize> = if needle.is_empty() {
+        Vec::new()
+    } else {
+        (0..tables.len())
+            .filter(|&i| contains_folded(&tables[i].name, &needle))
+            .collect()
+    };
+    let count = if needle.is_empty() {
+        tables.len()
+    } else {
+        matching.len()
+    };
     let mut chosen = None;
+    // Only the rows on screen are laid out: a database may have thousands
+    // of tables.
+    ui.spacing_mut().item_spacing.y = 0.0;
     egui::ScrollArea::vertical()
         .id_salt("builder_table_list")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for table in tables
-                .iter()
-                .filter(|t| t.name.to_lowercase().contains(&needle))
-            {
+        .show_rows(ui, p.row_height(), count, |ui, rows| {
+            for row in rows {
+                let table = &tables[if needle.is_empty() {
+                    row
+                } else {
+                    matching[row]
+                }];
                 let (rect, response) = ui.allocate_exact_size(
                     egui::vec2(ui.available_width(), p.row_height()),
                     egui::Sense::click_and_drag(),
@@ -673,6 +768,20 @@ fn table_list(
     chosen
 }
 
+/// `name` contains `needle`, given in lower case, in any letter case.
+fn contains_folded(name: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if name.is_ascii() && needle.is_ascii() {
+        name.as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+    } else {
+        name.to_lowercase().contains(needle)
+    }
+}
+
 /// A short mark of a join, drawn in its circle.
 fn join_mark(kind: JoinKind) -> &'static str {
     match kind {
@@ -693,7 +802,7 @@ fn canvas(
 ) -> Option<CanvasAction> {
     let l = |pl: &'static str, english: &'static str| if en { english } else { pl };
     let mut action = None;
-    let rows_of = |b: &BuilderUi, i: usize| b.columns_of(i).len().max(1);
+    let rows_of = |b: &BuilderUi, i: usize| b.box_rows(i).max(1);
     let height_of = |rows: usize| HEADER + rows.min(MAX_ROWS) as f32 * ROW + 6.0;
     let extent = b
         .nodes
@@ -745,9 +854,8 @@ fn canvas(
             let anchor_y = |b: &BuilderUi, field: &Field| {
                 let rect = rect_of(b, field.source);
                 let row = b
-                    .columns_of(field.source)
-                    .iter()
-                    .position(|c| *c == field.column)
+                    .column_names(field.source)
+                    .position(|c| c == field.column)
                     .unwrap_or(0);
                 let top = rect.top() + HEADER + 3.0;
                 let bottom = rect.bottom() - 3.0;
@@ -800,6 +908,7 @@ fn canvas(
             // The boxes.
             let mut rows_hit: Vec<(egui::Rect, Field)> = Vec::new();
             let mut remove = None;
+            let mut retry = None;
             let pointer = ui.input(|i| i.pointer.hover_pos());
             for i in 0..b.nodes.len() {
                 let rect = rect_of(b, i);
@@ -884,14 +993,47 @@ fn canvas(
                 }
                 let scroll = b.nodes[i].scroll.min(most);
                 let clip = painter.with_clip_rect(body);
-                if columns.len() == 1 {
+                // Under `*`: the columns being read, or why they could not
+                // be, with a way to read them again.
+                let note = |row: usize, text: &str, color| {
                     clip.text(
-                        body.left_top() + egui::vec2(28.0, ROW / 2.0),
+                        body.left_top() + egui::vec2(10.0, ROW * (row as f32 + 0.5)),
                         egui::Align2::LEFT_CENTER,
-                        l("wczytywanie kolumn…", "loading the columns…"),
+                        text,
                         egui::FontId::proportional(p.small()),
-                        p.muted,
+                        color,
                     );
+                };
+                if let Some(error) = b.columns_failed(i) {
+                    let lines = egui::Rect::from_min_size(
+                        body.left_top() + egui::vec2(0.0, ROW),
+                        egui::vec2(NODE_WIDTH, ROW * 2.0),
+                    )
+                    .intersect(body);
+                    let response = ui
+                        .interact(lines, ui.id().with(("node_retry", i)), egui::Sense::click())
+                        .on_hover_text(crate::messages::describe(error, en));
+                    note(
+                        1,
+                        l(
+                            "Nie udało się wczytać kolumn.",
+                            "The columns could not be read.",
+                        ),
+                        p.error,
+                    );
+                    note(
+                        2,
+                        l("Kliknij, aby spróbować ponownie.", "Click to try again."),
+                        if response.hovered() { p.text } else { p.accent },
+                    );
+                    if response.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if response.clicked() {
+                        retry = Some(b.query.sources[i].table.clone());
+                    }
+                } else if !b.has_columns(i) {
+                    note(1, l("wczytywanie kolumn…", "loading the columns…"), p.muted);
                 }
                 for (row, column) in columns.iter().enumerate() {
                     let top = body.top() + row as f32 * ROW - scroll;
@@ -964,15 +1106,23 @@ fn canvas(
                     let target = pointer.and_then(|at| {
                         rows_hit
                             .iter()
-                            .find(|(rect, field)| rect.contains(at) && field.source != from.source)
+                            .find(|(rect, _)| rect.contains(at))
                             .map(|(_, field)| field.clone())
                     });
-                    if let Some(to) = target {
-                        b.query.relations.push(Relation {
+                    match target {
+                        // A table is joined to itself through a second copy
+                        // of it; dropping onto its own box says so.
+                        Some(to) if to.source == from.source => {
+                            if to != from {
+                                action = Some(CanvasAction::SameTable);
+                            }
+                        }
+                        Some(to) => b.query.relations.push(Relation {
                             kind: JoinKind::Inner,
                             left: from,
                             right: to,
-                        });
+                        }),
+                        None => {}
                     }
                     b.dragging = None;
                 }
@@ -1015,6 +1165,9 @@ fn canvas(
             }
             if let Some(i) = remove {
                 b.remove_table(i);
+            }
+            if let Some(table) = retry {
+                b.retry_columns(&table);
             }
         });
     action
@@ -1099,7 +1252,10 @@ fn relation_menu(
     }
 }
 
-/// A choice of a column of the query.
+/// A choice of a column of the query, optionally without `*` and without
+/// the columns of one source. The choices are listed only while the list is
+/// open, so a closed choice costs nothing per frame.
+#[allow(clippy::too_many_arguments)]
 fn field_combo(
     ui: &mut egui::Ui,
     p: &theme::Palette,
@@ -1107,16 +1263,27 @@ fn field_combo(
     b: &BuilderUi,
     field: &mut Field,
     star: bool,
+    other_than: Option<usize>,
     width: f32,
 ) {
-    let choices = b.fields(star);
     widgets::combo(ui, p, egui::Id::new(id), b.label(field), width, |ui| {
         egui::ScrollArea::vertical()
             .max_height(300.0)
             .show(ui, |ui| {
-                for choice in choices {
-                    let label = b.label(&choice);
-                    ui.selectable_value(field, choice, label);
+                for source in (0..b.query.sources.len()).filter(|s| Some(*s) != other_than) {
+                    let alias = &b.query.sources[source].alias;
+                    for column in b.column_names(source).filter(|c| star || *c != "*") {
+                        let selected = field.source == source && field.column == column;
+                        if ui
+                            .selectable_label(selected, format!("{alias}.{column}"))
+                            .clicked()
+                        {
+                            *field = Field {
+                                source,
+                                column: column.to_owned(),
+                            };
+                        }
+                    }
                 }
             });
     });
@@ -1232,6 +1399,7 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
                         b,
                         &mut output.field,
                         true,
+                        None,
                         260.0,
                     );
                     aggregate_combo(
@@ -1241,11 +1409,12 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
                         &mut output.aggregate,
                         l("bez podsumowania", "no summary"),
                     );
-                    ui.add(
+                    let alias = ui.add(
                         widgets::field(p, &mut output.alias)
                             .desired_width(140.0)
                             .hint_text(l("alias", "alias")),
                     );
+                    b.note_focus(&alias);
                     if let Some(asked) = row_tools(ui, p, en, index, len) {
                         tool = Some((index, asked));
                     }
@@ -1277,9 +1446,10 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
                         .color(p.muted),
                     );
                     ui.label(RichText::new("AS").color(p.keyword));
-                    ui.add(
+                    let alias = ui.add(
                         widgets::field(p, &mut b.query.sources[index].alias).desired_width(160.0),
                     );
+                    b.note_focus(&alias);
                     if widgets::icon_button(
                         ui,
                         p,
@@ -1301,6 +1471,9 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
             let mut tool = None;
             for index in 0..len {
                 let mut relation = b.query.relations[index].clone();
+                // The two sides are columns of two tables: each list leaves
+                // out the table of the other side.
+                let (left_source, right_source) = (relation.left.source, relation.right.source);
                 ui.horizontal(|ui| {
                     field_combo(
                         ui,
@@ -1309,6 +1482,7 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
                         b,
                         &mut relation.left,
                         false,
+                        Some(right_source),
                         190.0,
                     );
                     let shown = relation.kind.sql();
@@ -1331,29 +1505,44 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
                         b,
                         &mut relation.right,
                         false,
+                        Some(left_source),
                         190.0,
                     );
                     if let Some(asked) = row_tools(ui, p, en, index, len) {
                         tool = Some((index, asked));
                     }
                 });
+                if relation.left.source == relation.right.source {
+                    widgets::feedback(
+                        ui,
+                        p,
+                        &crate::messages::describe("builder_relation_same_table", en),
+                        true,
+                    );
+                }
                 b.query.relations[index] = relation;
             }
             if let Some((index, asked)) = tool {
                 apply_tool(&mut b.query.relations, index, Some(asked));
             }
+            // A new relation starts between the first columns of two tables,
+            // so it waits until the columns of two of them are read.
+            let mut firsts = (0..b.query.sources.len()).filter_map(|source| {
+                b.column_names(source)
+                    .find(|column| *column != "*")
+                    .map(|column| Field {
+                        source,
+                        column: column.to_owned(),
+                    })
+            });
+            let (first, second) = (firsts.next(), firsts.next());
             if add_button(
                 ui,
                 p,
                 l("Dodaj relację", "Add a relation"),
-                b.query.sources.len() > 1,
-            ) {
-                let left = b.first_field();
-                let right = b
-                    .fields(false)
-                    .into_iter()
-                    .find(|f| f.source != left.source)
-                    .unwrap_or_else(|| left.clone());
+                second.is_some(),
+            ) && let (Some(left), Some(right)) = (first, second)
+            {
                 b.query.relations.push(Relation {
                     kind: JoinKind::Inner,
                     left,
@@ -1372,6 +1561,15 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
             let mut tool = None;
             for (index, condition) in list.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
+                    // The number the grouping below refers to.
+                    ui.add_sized(
+                        [16.0, p.control_height()],
+                        egui::Label::new(
+                            RichText::new(format!("{}", index + 1))
+                                .monospace()
+                                .color(p.muted),
+                        ),
+                    );
                     if index == 0 {
                         ui.add_space(64.0);
                     } else {
@@ -1404,7 +1602,8 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
                         b,
                         &mut condition.field,
                         having,
-                        200.0,
+                        None,
+                        170.0,
                     );
                     widgets::combo(
                         ui,
@@ -1432,11 +1631,12 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
                                 "value or column, e.g. 5, 'text'",
                             ),
                         };
-                        ui.add(
+                        let value = ui.add(
                             widgets::field(p, &mut condition.value)
                                 .desired_width(180.0)
                                 .hint_text(hint),
                         );
+                        b.note_focus(&value);
                     }
                     if let Some(asked) = row_tools(ui, p, en, index, len) {
                         tool = Some((index, asked));
@@ -1467,12 +1667,29 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
                     value: String::new(),
                 });
             }
+            // Where AND meets OR, the order in which they are joined is
+            // spelled out, the way the SQL writes it.
+            let joined_by = |or: bool| list.iter().skip(1).any(|c| c.or == or);
+            if joined_by(true) && joined_by(false) {
+                widgets::help(
+                    ui,
+                    p,
+                    &format!(
+                        "{} {}.",
+                        l(
+                            "Warunki łączą się po kolei, od góry:",
+                            "The conditions are joined in turn, from the top:",
+                        ),
+                        grouping(&list)
+                    ),
+                );
+            }
             widgets::help(
                 ui,
                 p,
                 l(
-                    "Wartość to SQL: liczba, tekst w apostrofach albo inna kolumna (alias.kolumna).",
-                    "A value is SQL: a number, text in quotes or another column (alias.column).",
+                    "Wartość to SQL: liczba, tekst w apostrofach albo inna kolumna (alias.kolumna). Średniki, komentarze i podzapytania nie są dozwolone.",
+                    "A value is SQL: a number, text in quotes or another column (alias.column). Semicolons, comments and subqueries are not allowed.",
                 ),
             );
             if having {
@@ -1487,7 +1704,7 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
             for index in 0..len {
                 let mut field = b.query.group_by[index].clone();
                 ui.horizontal(|ui| {
-                    field_combo(ui, p, ("group", index), b, &mut field, false, 260.0);
+                    field_combo(ui, p, ("group", index), b, &mut field, false, None, 260.0);
                     if let Some(asked) = row_tools(ui, p, en, index, len) {
                         tool = Some((index, asked));
                     }
@@ -1535,6 +1752,7 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
                         b,
                         &mut term.field,
                         term.aggregate.is_some(),
+                        None,
                         260.0,
                     );
                     let shown = if term.descending { "DESC" } else { "ASC" };
@@ -1569,18 +1787,20 @@ fn clause_page(ui: &mut egui::Ui, p: &theme::Palette, en: bool, b: &mut BuilderU
         }
         BuilderPage::Limit => {
             widgets::form_row(ui, p, 160.0, l("Najwięcej wierszy", "Most rows"), |ui| {
-                ui.add(
+                let limit = ui.add(
                     widgets::field(p, &mut b.query.limit)
                         .desired_width(120.0)
                         .hint_text(l("bez limitu", "no limit")),
                 );
+                b.note_focus(&limit);
             });
             widgets::form_row(ui, p, 160.0, l("Pomiń wiersze", "Skip rows"), |ui| {
-                ui.add(
+                let offset = ui.add(
                     widgets::field(p, &mut b.query.offset)
                         .desired_width(120.0)
                         .hint_text("0"),
                 );
+                b.note_focus(&offset);
             });
         }
         BuilderPage::Result => {}

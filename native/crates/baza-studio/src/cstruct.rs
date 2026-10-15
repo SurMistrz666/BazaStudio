@@ -134,6 +134,8 @@ pub enum ErrorKind {
     /// Nothing that lays out bytes was declared.
     NoStructure,
     Unsupported(String),
+    /// More than a header that lays out bytes needs: what went over.
+    TooLarge(String),
 }
 impl Error {
     /// The reason as a sentence.
@@ -171,6 +173,7 @@ impl Error {
                 format!("„{what}” nie jest obsługiwane"),
                 format!("“{what}” is not supported"),
             ),
+            ErrorKind::TooLarge(what) => (format!("za duże: {what}"), format!("too large: {what}")),
         };
         if en {
             format!("Line {}: {english}", self.line)
@@ -363,8 +366,25 @@ fn directive(
     Ok(())
 }
 
+/// Longest source read.
+pub const MAX_SOURCE_BYTES: usize = 256 * 1024;
+/// Structures inside structures, parentheses inside a constant and levels of
+/// a decoded value: a header nests a handful of them, and a source that
+/// nests thousands would overflow the stack of the window's thread.
+const MAX_NESTING: usize = 64;
+/// Dimensions of an array, also through typedefs.
+const MAX_DIMENSIONS: usize = 8;
+/// Bytes of one type.
+const MAX_TYPE_BYTES: usize = 1 << 32;
+
 /// Read the declarations of a C or C++ source.
 pub fn parse(source: &str, options: &Options) -> Result<Program> {
+    if source.len() > MAX_SOURCE_BYTES {
+        return Err(Error {
+            line: 1,
+            kind: ErrorKind::TooLarge(format!("{} KiB", source.len() / 1024)),
+        });
+    }
     let text = strip_comments(source);
     let mut tokens = Vec::new();
     let mut defines = HashMap::new();
@@ -385,6 +405,7 @@ pub fn parse(source: &str, options: &Options) -> Result<Program> {
         program: Program::default(),
         options: *options,
         last_line: text.lines().count().max(1),
+        nesting: 0,
     };
     parser.builtins();
     while parser.at < parser.tokens.len() {
@@ -415,6 +436,8 @@ struct Parser {
     program: Program,
     options: Options,
     last_line: usize,
+    /// Bodies of structures open around the one being read.
+    nesting: usize,
 }
 
 /// Words that make up a primitive type, such as `unsigned long long int`.
@@ -714,7 +737,7 @@ impl Parser {
     /// `<<`, `>>`, `|`, `&` and parentheses. `None` for anything else.
     fn constant_of(tokens: &[Token], defines: &HashMap<String, i128>) -> Option<i128> {
         let mut at = 0;
-        let value = expression(tokens, &mut at, defines, 0)?;
+        let value = expression(tokens, &mut at, defines, 0, 0)?;
         (at == tokens.len()).then_some(value)
     }
 
@@ -840,6 +863,12 @@ impl Parser {
             // Known inside its own body, for a member that refers to it.
             self.types.insert(name.clone(), Ty::Composite(index));
         }
+        if self.nesting >= MAX_NESTING {
+            return self.error(ErrorKind::TooLarge(format!(
+                "{MAX_NESTING}+ struktur w strukturach / structures within structures"
+            )));
+        }
+        self.nesting += 1;
         self.at += 1;
         let mut fields = Vec::new();
         if let Some(base) = base {
@@ -854,6 +883,7 @@ impl Parser {
             }
             self.member(&name, &mut fields)?;
         }
+        self.nesting -= 1;
         self.at += 1;
         packed |= self.attributes()?;
         let composite = &mut self.program.composites[index];
@@ -1033,6 +1063,18 @@ impl Parser {
             self.at += 1;
         }
         self.attributes()?;
+        // The dimensions of a type named by a typedef count as well.
+        let mut inner = &ty;
+        let mut depth = dims.len();
+        while let Ty::Array(element, _) = inner {
+            depth += 1;
+            inner = element;
+        }
+        if depth > MAX_DIMENSIONS {
+            return self.error(ErrorKind::TooLarge(format!(
+                "{name}: {depth} wymiarów / dimensions"
+            )));
+        }
         // `int a[2][3]` is two arrays of three.
         let ty = dims
             .into_iter()
@@ -1098,7 +1140,7 @@ impl Parser {
             // Its constants may size the arrays that follow.
             self.defines.insert(variant.clone(), next);
             values.push((next, variant));
-            next += 1;
+            next = next.saturating_add(1);
             if self.is_punct(',') {
                 self.at += 1;
             }
@@ -1118,14 +1160,16 @@ impl Parser {
     }
 }
 
-/// A constant expression by precedence climbing.
+/// A constant expression by precedence climbing; `depth` counts the
+/// parentheses and signs around it.
 fn expression(
     tokens: &[Token],
     at: &mut usize,
     defines: &HashMap<String, i128>,
     min: u8,
+    depth: usize,
 ) -> Option<i128> {
-    let mut left = operand(tokens, at, defines)?;
+    let mut left = operand(tokens, at, defines, depth)?;
     loop {
         let (op, width) = match (
             tokens.get(*at).map(|t| &t.tok),
@@ -1147,7 +1191,7 @@ fn expression(
             return Some(left);
         }
         *at += width;
-        let right = expression(tokens, at, defines, precedence + 1)?;
+        let right = expression(tokens, at, defines, precedence + 1, depth)?;
         left = match op {
             '+' => left.checked_add(right)?,
             '-' => left.checked_sub(right)?,
@@ -1156,21 +1200,34 @@ fn expression(
             '%' => left.checked_rem(right)?,
             '|' => left | right,
             '&' => left & right,
-            'l' => left.checked_shl(u32::try_from(right).ok()?)?,
+            // A shift that pushes bits out of the value is no constant.
+            'l' => {
+                let shift = u32::try_from(right).ok()?;
+                let shifted = left.checked_shl(shift)?;
+                (shifted >> shift == left).then_some(shifted)?
+            }
             _ => left.checked_shr(u32::try_from(right).ok()?)?,
         };
     }
 }
 
-fn operand(tokens: &[Token], at: &mut usize, defines: &HashMap<String, i128>) -> Option<i128> {
+fn operand(
+    tokens: &[Token],
+    at: &mut usize,
+    defines: &HashMap<String, i128>,
+    depth: usize,
+) -> Option<i128> {
+    if depth >= MAX_NESTING {
+        return None;
+    }
     let tok = &tokens.get(*at)?.tok;
     *at += 1;
     match tok {
         Tok::Num(n) => Some(*n),
         Tok::Ident(name) => defines.get(name).copied(),
-        Tok::Punct('-') => operand(tokens, at, defines).map(|n| -n),
+        Tok::Punct('-') => operand(tokens, at, defines, depth + 1)?.checked_neg(),
         Tok::Punct('(') => {
-            let value = expression(tokens, at, defines, 0)?;
+            let value = expression(tokens, at, defines, 0, depth + 1)?;
             (tokens.get(*at)?.tok == Tok::Punct(')')).then(|| {
                 *at += 1;
                 value
@@ -1221,13 +1278,13 @@ impl<'p> Layout<'p> {
                 offsets.push(0);
                 end = end.max(size);
             } else {
-                let offset = end.next_multiple_of(field_align);
+                let offset = bounded(end.checked_next_multiple_of(field_align), &composite.name)?;
                 offsets.push(offset);
-                end = offset + size;
+                end = bounded(offset.checked_add(size), &composite.name)?;
             }
         }
         path.pop();
-        let size = end.next_multiple_of(align);
+        let size = bounded(end.checked_next_multiple_of(align), &composite.name)?;
         self.composites[index] = Some((size, align, offsets));
         Ok((size, align))
     }
@@ -1242,7 +1299,7 @@ impl<'p> Layout<'p> {
             Ty::Composite(index) => self.composite(*index, path)?,
             Ty::Array(inner, count) => {
                 let (size, align) = self.size_align(inner, path)?;
-                (size * count, align)
+                (bounded(size.checked_mul(*count), "[]")?, align)
             }
         })
     }
@@ -1253,13 +1310,21 @@ impl<'p> Layout<'p> {
             Ty::Prim(prim) => prim.size(),
             Ty::Enum(index) => self.program.enums[*index].underlying.size(),
             Ty::Composite(index) => self.composites[*index].as_ref().map_or(0, |c| c.0),
-            Ty::Array(inner, count) => self.size(inner) * count,
+            Ty::Array(inner, count) => self.size(inner).saturating_mul(*count),
         }
     }
 
     fn offsets(&self, index: usize) -> &[usize] {
         self.composites[index].as_ref().map_or(&[], |c| &c.2)
     }
+}
+
+/// A size or an offset of at most [`MAX_TYPE_BYTES`].
+fn bounded(value: Option<usize>, name: &str) -> Result<usize> {
+    value.filter(|v| *v <= MAX_TYPE_BYTES).ok_or_else(|| Error {
+        line: 1,
+        kind: ErrorKind::TooLarge(format!("{name} > 4 GiB")),
+    })
 }
 
 /// One line of a decoded value: a field, an element or a structure.
@@ -1290,6 +1355,11 @@ pub struct Decoded {
 const ARRAY_LINES: usize = 256;
 /// Most structures of one value decoded.
 const MAX_RECORDS: usize = 1000;
+/// Most lines of one value: a value is decoded again as its header is typed,
+/// and structures of arrays of structures multiply.
+const MAX_LINES: usize = 20_000;
+/// Most bytes of a `char` or byte array shown as its value.
+const MAX_SHOWN_BYTES: usize = 1024;
 
 /// The structures declared at the top of a program, by name, for the choice
 /// of the one a value is; the last declared comes last.
@@ -1348,6 +1418,9 @@ pub fn decode(
         options,
     };
     for record in 0..records {
+        if decoded.lines.len() >= MAX_LINES {
+            break;
+        }
         let depth = usize::from(records > 1);
         if records > 1 {
             decoded.lines.push(Line {
@@ -1360,6 +1433,16 @@ pub fn decode(
             });
         }
         reader.fields(index, record * size, depth, &mut decoded.lines);
+    }
+    if decoded.lines.len() >= MAX_LINES {
+        decoded.lines.push(Line {
+            depth: 0,
+            name: "…".into(),
+            type_name: String::new(),
+            offset: 0,
+            size: 0,
+            value: format!("{MAX_LINES}+"),
+        });
     }
     Ok(decoded)
 }
@@ -1389,6 +1472,9 @@ impl Reader<'_> {
     }
 
     fn fields(&self, index: usize, base: usize, depth: usize, lines: &mut Vec<Line>) {
+        if depth > MAX_NESTING {
+            return;
+        }
         let composite = &self.program.composites[index];
         for (field, offset) in composite.fields.iter().zip(self.layout.offsets(index)) {
             let at = base + offset;
@@ -1401,6 +1487,9 @@ impl Reader<'_> {
     }
 
     fn value(&self, name: &str, ty: &Ty, at: usize, depth: usize, lines: &mut Vec<Line>) {
+        if lines.len() >= MAX_LINES {
+            return;
+        }
         let size = self.layout.size(ty);
         let mut line = Line {
             depth,
@@ -1438,34 +1527,41 @@ impl Reader<'_> {
                 }
                 Ty::Prim(Prim::U8 | Prim::I8) => {
                     line.value = self.slice(at, *count).map_or("—".into(), |bytes| {
-                        bytes
+                        let shown = bytes.len().min(MAX_SHOWN_BYTES / 2);
+                        let mut text = bytes[..shown]
                             .iter()
                             .map(|b| format!("{b:02x}"))
                             .collect::<Vec<_>>()
-                            .join(" ")
+                            .join(" ");
+                        if shown < bytes.len() {
+                            text.push_str(" …");
+                        }
+                        text
                     });
                     lines.push(line);
                 }
                 _ => {
                     lines.push(line);
                     let step = self.layout.size(inner);
+                    // Elements past the end of the bytes hold nothing to read.
+                    let mut listed = 0;
                     for element in 0..(*count).min(ARRAY_LINES) {
-                        self.value(
-                            &format!("[{element}]"),
-                            inner,
-                            at + element * step,
-                            depth + 1,
-                            lines,
-                        );
+                        let offset = at + element * step;
+                        if lines.len() >= MAX_LINES || element > 0 && offset >= self.bytes.len() {
+                            break;
+                        }
+                        self.value(&format!("[{element}]"), inner, offset, depth + 1, lines);
+                        listed += 1;
                     }
-                    if *count > ARRAY_LINES {
+                    // Past the limit of lines, one line at the end says so.
+                    if listed < *count && lines.len() < MAX_LINES {
                         lines.push(Line {
                             depth: depth + 1,
                             name: "…".into(),
                             type_name: String::new(),
-                            offset: at + ARRAY_LINES * step,
-                            size: (count - ARRAY_LINES) * step,
-                            value: format!("+{}", count - ARRAY_LINES),
+                            offset: at + listed * step,
+                            size: (count - listed) * step,
+                            value: format!("+{}", count - listed),
                         });
                     }
                 }
@@ -1521,7 +1617,8 @@ impl Reader<'_> {
             return "—".into();
         };
         let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
-        let text: String = bytes[..end]
+        let cut = end > MAX_SHOWN_BYTES;
+        let text: String = bytes[..end.min(MAX_SHOWN_BYTES)]
             .iter()
             .map(|&b| {
                 if b.is_ascii_graphic() || b == b' ' {
@@ -1531,7 +1628,11 @@ impl Reader<'_> {
                 }
             })
             .collect();
-        format!("\"{text}\"")
+        if cut {
+            format!("\"{text}\"…")
+        } else {
+            format!("\"{text}\"")
+        }
     }
 }
 
@@ -1755,5 +1856,67 @@ mod tests {
                 .describe(false)
                 .starts_with("Wiersz 1")
         );
+    }
+
+    #[test]
+    fn hostile_headers_are_refused_or_bounded() {
+        let options = Options::default();
+        let too_large = |source: &str| {
+            matches!(
+                parse(source, &options).and_then(|p| decode(&p, "", &[], &options).map(|_| ())),
+                Err(Error {
+                    kind: ErrorKind::TooLarge(_) | ErrorKind::ArraySize(_),
+                    ..
+                })
+            )
+        };
+        // Nesting that would overflow the stack.
+        let nested = format!(
+            "{}int a;{} s;",
+            "struct A{".repeat(20_000),
+            "} s;".repeat(20_000)
+        );
+        assert!(too_large(&nested));
+        let parens = format!(
+            "#define N {}1{}\nstruct S {{ char a[N]; }};",
+            "(".repeat(100_000),
+            ")".repeat(100_000)
+        );
+        assert!(too_large(&parens));
+        assert!(too_large(&format!(
+            "struct S {{ int a{}; }};",
+            "[1]".repeat(100)
+        )));
+        // Sizes past the address space, and constants past i128.
+        assert!(too_large(
+            "struct A { char a[16777216][16777216][65536]; };"
+        ));
+        assert!(too_large("#define X -(1 << 127)\nstruct S { char a[X]; };"));
+        assert!(
+            parse(
+                "enum E { A = 0x7fffffffffffffffffffffffffffffff, B };\nstruct S { E e; };",
+                &options
+            )
+            .is_ok()
+        );
+        // Arrays of arrays of structures: the lines stop at the limit.
+        let program = parse(
+            "struct S { int v[256]; }; struct T { S s[256]; }; struct U { T t[256]; };",
+            &options,
+        )
+        .unwrap();
+        let lines = decode(&program, "U", &vec![0; 1 << 20], &options)
+            .unwrap()
+            .lines;
+        assert!(lines.len() <= MAX_LINES + 1, "{}", lines.len());
+        // Nothing past the end of the bytes is listed element by element.
+        let lines = decode(&program, "U", &[], &options).unwrap().lines;
+        assert!(lines.len() < 10, "{}", lines.len());
+        // A long text is cut.
+        let program = parse("struct S { char s[100000]; };", &options).unwrap();
+        let lines = decode(&program, "S", &vec![b'a'; 100_000], &options)
+            .unwrap()
+            .lines;
+        assert!(lines[0].value.len() < 2 * MAX_SHOWN_BYTES);
     }
 }

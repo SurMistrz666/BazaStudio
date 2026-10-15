@@ -74,6 +74,18 @@ fn condition_detail(code: &str, detail: &str, en: bool) -> Option<String> {
         ("filter_condition_rejected", true) => format!(
             "The database rejected the filter condition (error code {detail}). Correct the condition or clear the filter field."
         ),
+        ("builder_value_word", false) => format!(
+            "Warunek: słowo {detail} jest niedozwolone w wartości. Wartość to liczba, tekst albo kolumna; kolumnę o takiej nazwie ujmij w cudzysłów."
+        ),
+        ("builder_value_word", true) => format!(
+            "Condition: the word {detail} is not allowed in a value. A value is a number, a text or a column; put a column with this name in quotes."
+        ),
+        ("builder_value_function", false) => format!(
+            "Warunek: funkcja {detail} jest niedozwolona. Wartość może używać funkcji, które tylko liczą wartość, np. LOWER, COALESCE, DATE."
+        ),
+        ("builder_value_function", true) => format!(
+            "Condition: the function {detail} is not allowed. A value may use functions that only compute a value, such as LOWER, COALESCE, DATE."
+        ),
         _ => return None,
     })
 }
@@ -225,8 +237,8 @@ fn known(code: &str) -> Option<(&'static str, &'static str)> {
             "Length and decimals are numbers (or MAX), and decimals need a length.",
         ),
         "column_default_invalid" => (
-            "Wartość domyślna to jedno wyrażenie, bez średnika i komentarzy.",
-            "A default value is one expression, without a semicolon or comments.",
+            "Wartość domyślna to jedno wyrażenie, bez średnika i komentarzy, z zamkniętymi cudzysłowami i nawiasami.",
+            "A default value is one expression, without a semicolon or comments, with its quotes and brackets closed.",
         ),
         "column_change_unsupported" => (
             "Ta baza nie zmieni tej kolumny w miejscu. Zmień ją poleceniem SQL w edytorze albo utwórz tabelę od nowa.",
@@ -282,20 +294,32 @@ fn known(code: &str) -> Option<(&'static str, &'static str)> {
             "A foreign key needs a name, a referenced table and pairs of columns on both sides.",
         ),
         "check_invalid" => (
-            "Sprawdzenie potrzebuje nazwy i jednego warunku, bez średnika i komentarzy.",
-            "A check needs a name and one condition, without a semicolon or comments.",
+            "Sprawdzenie potrzebuje nazwy i jednego warunku, bez średnika i komentarzy, z zamkniętymi cudzysłowami i nawiasami.",
+            "A check needs a name and one condition, without a semicolon or comments, with its quotes and brackets closed.",
         ),
         "trigger_invalid" => (
             "Wyzwalacz potrzebuje nazwy i treści; DELIMITER nie jest potrzebny.",
             "A trigger needs a name and a body; DELIMITER is not needed.",
+        ),
+        "trigger_body_invalid" => (
+            "Treść wyzwalacza to jedno polecenie albo jeden blok BEGIN … END, a po nim nic więcej. Sprawdź, czy każdy blok jest zamknięty (END IF, END CASE, END), czy cudzysłowy się zamykają i czy nie ma komentarzy /*! */.",
+            "A trigger body is one statement or one BEGIN … END block, with nothing after it. Check that every block is closed (END IF, END CASE, END), that the quotes close and that there are no /*! */ comments.",
         ),
         "table_option_invalid" => (
             "Jedna z opcji tabeli ma niedozwoloną wartość.",
             "One of the table options has a value that is not allowed.",
         ),
         "partition_invalid" => (
-            "Partycje są niepełne: sprawdź wyrażenie, wartości każdej partycji albo ich liczbę.",
-            "The partitions are incomplete: check the expression, the values of each partition or their count.",
+            "Partycje są niepełne albo błędne: sprawdź wyrażenie, wartości każdej partycji (cudzysłowy i nawiasy muszą się zamykać) albo ich liczbę.",
+            "The partitions are incomplete or wrong: check the expression, the values of each partition (quotes and brackets must close) or their count.",
+        ),
+        "partition_subpartitions_unsupported" => (
+            "Ta tabela ma podpartycje, których projektant nie zmienia. Możesz usunąć podział („Bez partycji”) albo zmienić go poleceniem SQL w edytorze.",
+            "This table has subpartitions, which the designer does not change. You can take the partitioning away (“No partitions”) or change it with SQL in the editor.",
+        ),
+        "sql_fragment_invalid" => (
+            "Wpisany fragment SQL musi być jednym wyrażeniem: bez średnika i komentarzy, z zamkniętymi cudzysłowami i nawiasami.",
+            "The SQL typed here must be one expression: without a semicolon or comments, with its quotes and brackets closed.",
         ),
         "index_name_duplicate" => (
             "Dwa indeksy mają tę samą nazwę.",
@@ -328,6 +352,34 @@ fn known(code: &str) -> Option<(&'static str, &'static str)> {
         "builder_offset_needs_limit" => (
             "Pomijanie wierszy w tej bazie wymaga też limitu wierszy.",
             "Skipping rows needs a row limit as well on this database.",
+        ),
+        "builder_value_too_long" => (
+            "Warunek: wartość jest za długa.",
+            "Condition: the value is too long.",
+        ),
+        "builder_value_unterminated" => (
+            "Warunek: tekst albo nazwa w cudzysłowie nie jest zamknięta.",
+            "Condition: a quoted text or name is not closed.",
+        ),
+        "builder_value_comment" => (
+            "Warunek: komentarze (--, #, /* */) nie są dozwolone w wartości.",
+            "Condition: comments (--, #, /* */) are not allowed in a value.",
+        ),
+        "builder_value_statements" => (
+            "Warunek: wartość nie może zawierać średnika ani drugiego polecenia.",
+            "Condition: a value cannot contain a semicolon or a second statement.",
+        ),
+        "builder_value_parentheses" => (
+            "Warunek: nawiasy w wartości się nie domykają.",
+            "Condition: the parentheses of a value do not match.",
+        ),
+        "builder_between_value" => (
+            "Warunek BETWEEN potrzebuje dwóch wartości połączonych przez AND, np. 1 AND 10.",
+            "A BETWEEN condition needs two values joined by AND, such as 1 AND 10.",
+        ),
+        "builder_relation_same_table" => (
+            "Relacja łączy dwie kolumny tej samej tabeli. Aby połączyć tabelę z nią samą, dodaj ją na płótno drugi raz i połącz kolumny obu kopii.",
+            "A relation joins two columns of the same table. To join a table to itself, put it on the canvas a second time and relate the columns of the two copies.",
         ),
         "engine_foreign_keys_unsupported" => (
             "Ten silnik nie obsługuje kluczy obcych. Usuń je na karcie „Klucze obce” albo zostań przy InnoDB.",
@@ -644,6 +696,18 @@ mod tests {
             "filter_condition_rejected [42601]",
             "filter_condition_word [SELECT]",
             "filter_condition_function [SLEEP]",
+            "builder_value_too_long",
+            "builder_value_unterminated",
+            "builder_value_comment",
+            "builder_value_statements",
+            "builder_value_parentheses",
+            "builder_value_word [SELECT]",
+            "builder_value_function [SLEEP]",
+            "builder_between_value",
+            "builder_relation_same_table",
+            "trigger_body_invalid",
+            "partition_subpartitions_unsupported",
+            "sql_fragment_invalid",
         ] {
             for en in [false, true] {
                 let text = describe(code, en);

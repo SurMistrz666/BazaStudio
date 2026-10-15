@@ -298,7 +298,11 @@ impl StudioApp {
                 },
             )
         });
-        let keyboard = ui.memory(|m| m.has_focus(grid_id))
+        // A dialog over the grid, such as the one that asks before saving,
+        // keeps the keys: nothing it shows changes under it.
+        let modal = ui.ctx().memory(|m| m.top_modal_layer()).is_some();
+        let keyboard = !modal
+            && ui.memory(|m| m.has_focus(grid_id))
             && !editor_focused
             && !ui.ctx().text_edit_focused()
             && self.cell_editor.is_none();
@@ -482,17 +486,15 @@ impl StudioApp {
         }
         let total_rows = result.rows.len();
         let total_columns = result.columns.len();
-        // The values an ENUM or a SET column takes, offered while it is edited.
-        let column_choices = result
-            .columns
-            .iter()
-            .map(|shown| {
-                tab.columns
-                    .iter()
-                    .find(|column| column.name == shown.name)
-                    .and_then(|column| sql::choices(&column.data_type))
-            })
-            .collect::<Vec<_>>();
+        // The values an ENUM or a SET column takes, offered while it is
+        // edited: only the column of the cell being edited is looked up.
+        let edited_choices = self
+            .cell_editor
+            .as_ref()
+            .filter(|e| e.inline && e.tab == tab.id)
+            .and_then(|e| result.columns.get(e.column))
+            .and_then(|shown| tab.columns.iter().find(|column| column.name == shown.name))
+            .and_then(|column| sql::choices(&column.data_type));
         let range = tab.range;
         let marked = |r: usize, c: usize| {
             range.is_some_and(|range| range.contains(r, c, total_rows, total_columns))
@@ -768,7 +770,7 @@ impl StudioApp {
                                         // An ENUM or a SET column lists its values
                                         // under the cell: the arrows choose one,
                                         // Space ticks a value of a SET, Enter saves.
-                                        let choices = column_choices[c].as_ref();
+                                        let choices = edited_choices.as_ref();
                                         let choice_id = field.with("choice");
                                         let mut chosen = choices.map(|(_, values)| {
                                             ui.data(|d| d.get_temp::<usize>(choice_id))
@@ -1126,6 +1128,7 @@ impl StudioApp {
                     });
             });
         if !editor_focused
+            && !modal
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2))
             && let Some((r, c)) = tab.selected_cell
             && editable
@@ -1140,7 +1143,7 @@ impl StudioApp {
         // ⌘/Ctrl+A marks the page, ⌘/Ctrl+C copies the mark and Esc clears
         // it, while no text field has the keyboard.
         let typing = editor_focused || ui.ctx().text_edit_focused();
-        if !typing {
+        if !typing && !modal {
             if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
                 select_all = true;
             }
@@ -1992,9 +1995,9 @@ impl StudioApp {
     pub(super) fn browse(&mut self, index: usize) {
         if self.has_staged(index) {
             let text = self.tr(
-                // The font has no ✓ and ✕: the buttons are painted icons.
-                "Najpierw zapisz zmiany (Ctrl+S) albo je porzuć.",
-                "Save the changes first (Ctrl+S) or discard them.",
+                // The font has ✓ but no ✕: × stands for the painted icon.
+                "Najpierw zapisz zmiany (✓ albo Ctrl+S) albo je porzuć (×).",
+                "Save the changes first (✓ or Ctrl+S) or discard them (×).",
             );
             self.notify(text.into(), true);
             return;

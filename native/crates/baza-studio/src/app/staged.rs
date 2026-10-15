@@ -18,6 +18,8 @@ pub(super) struct SaveConfirm {
     pub rows: usize,
     /// The statements, as the history will show them.
     pub statements: Vec<String>,
+    /// The widget that had the keyboard before the dialog took it.
+    pub focus_back: Option<egui::Id>,
 }
 
 impl StudioApp {
@@ -160,6 +162,7 @@ impl StudioApp {
                         .iter()
                         .map(|change| db.change_text(change).unwrap_or_default())
                         .collect(),
+                    focus_back: None,
                 });
             }
             Err(error) => self.notify(error.to_string(), true),

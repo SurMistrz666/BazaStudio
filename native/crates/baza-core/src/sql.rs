@@ -466,6 +466,18 @@ pub fn typed_condition(dialect: &Dialect, text: &str) -> anyhow::Result<String> 
         text.len() <= MAX_CONDITION_BYTES && !text.contains('\0'),
         "filter_condition_too_long"
     );
+    check_condition(dialect, text)?;
+    // A server of an engine whose strings take a backslash as an escape may
+    // be told to read it literally (MySQL's `NO_BACKSLASH_ESCAPES`), and the
+    // condition has to stay one condition then as well.
+    if dialect.lexer.backslash_escapes {
+        check_condition(&backslash_flipped(dialect), text)?;
+    }
+    Ok(format!("({text})"))
+}
+
+/// [`typed_condition`] for one way of reading the quotes of the text.
+fn check_condition(dialect: &Dialect, text: &str) -> anyhow::Result<()> {
     let mut tokens = Vec::new();
     lex(dialect, text, |kind, range| {
         if kind != Lexeme::Space {
@@ -515,7 +527,43 @@ pub fn typed_condition(dialect: &Dialect, text: &str) -> anyhow::Result<String> 
         }
     }
     anyhow::ensure!(depth == 0, "filter_condition_parentheses");
-    Ok(format!("({text})"))
+    Ok(())
+}
+
+/// `dialect` with a backslash inside strings read the other way: as an
+/// escape where it was literal, literally where it was an escape.
+pub(crate) fn backslash_flipped(dialect: &Dialect) -> Dialect {
+    let mut flipped = *dialect;
+    flipped.lexer.backslash_escapes = !flipped.lexer.backslash_escapes;
+    flipped
+}
+
+/// SQL typed into one field of a statement the application writes (a
+/// default value, a CHECK condition, the values of a partition): checked to
+/// stay a part of that statement. Its quotes close, it holds no comment and
+/// no `;`, and a parenthesis in it closes only one it opened. The text is
+/// read with the rules of the engine and again with a backslash in strings
+/// read the other way, since a server may be set to either: MySQL under
+/// `NO_BACKSLASH_ESCAPES` takes `'a\'` as a whole string. Fails with
+/// `sql_fragment_invalid`.
+pub fn sql_fragment(dialect: &Dialect, text: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!text.contains('\0'), "sql_fragment_invalid");
+    for reading in [*dialect, backslash_flipped(dialect)] {
+        let mut depth = 0usize;
+        let mut valid = true;
+        lex(&reading, text, |kind, range| match (kind, &text[range]) {
+            (Lexeme::Comment, _) | (Lexeme::Symbol, ";") => valid = false,
+            (Lexeme::Symbol, "(") => depth += 1,
+            (Lexeme::Symbol, ")") => match depth.checked_sub(1) {
+                Some(outer) => depth = outer,
+                None => valid = false,
+            },
+            _ => {}
+        })
+        .map_err(|_| anyhow::anyhow!("sql_fragment_invalid"))?;
+        anyhow::ensure!(valid && depth == 0, "sql_fragment_invalid");
+    }
+    Ok(())
 }
 pub fn quote_identifier(dialect: &Dialect, name: &str) -> anyhow::Result<String> {
     anyhow::ensure!(
@@ -823,6 +871,8 @@ mod tests {
                 &MYSQL,
                 "note = \"it's\" OR (a > 1 AND (b < 2 OR c IS NOT NULL))",
             ),
+            // Whole strings whether a backslash escapes or not.
+            (&MYSQL, r"path = 'C:\\dir' OR note = 'a''b'"),
         ] {
             assert!(typed(dialect, text).is_ok(), "{text}");
         }
@@ -847,6 +897,13 @@ mod tests {
                 "filter_condition_comment",
             ),
             (&SQLITE, "name = 'x", "filter_condition_unterminated"),
+            // A server that reads a backslash literally ends the string at
+            // `\'`, and the rest of the line is a comment there.
+            (
+                &MYSQL,
+                r"name = 'a\' OR 1 = 1 -- '",
+                "filter_condition_comment",
+            ),
             (&SQLITE, "(id = 1", "filter_condition_parentheses"),
             // Closing early would leave the parentheses the condition goes in.
             (&SQLITE, "id = 1) OR (1 = 1", "filter_condition_parentheses"),
@@ -889,6 +946,43 @@ mod tests {
             typed(&SQLITE, &"a = 1 OR ".repeat(600)).unwrap_err(),
             "filter_condition_too_long"
         );
+    }
+    #[test]
+    fn a_typed_fragment_stays_inside_its_statement() {
+        for (dialect, text) in [
+            (&MYSQL, "CURRENT_TIMESTAMP"),
+            (&MYSQL, "'it''s; -- fine /* here */'"),
+            (&MYSQL, r"'C:\\dir'"),
+            (&MYSQL, "(1 + 2) * 3"),
+            (&MYSQL, "'a', 'b'"),
+            (&POSTGRES, "now()"),
+            (&POSTGRES, "$$a ' b$$"),
+        ] {
+            assert!(sql_fragment(dialect, text).is_ok(), "{text}");
+        }
+        for (dialect, text) in [
+            (&MYSQL, "1; DROP TABLE users"),
+            (&MYSQL, "1 -- x"),
+            (&MYSQL, "1 # x"),
+            (&MYSQL, "1 /*!50000 OR 1 */"),
+            // An unterminated quote would swallow the SQL written after it.
+            (&MYSQL, "1) COMMENT = 'x"),
+            (&MYSQL, "0 COMMENT 'x"),
+            // Whole with backslash escapes, open without them, and back.
+            (&MYSQL, r"'it\'s'"),
+            (&MYSQL, r"'a\'"),
+            (&POSTGRES, r"'a\' || 'b'"),
+            // A parenthesis closed that the fragment did not open.
+            (&MYSQL, "1), (2"),
+            (&MYSQL, "(1"),
+            (&MYSQL, "a\0b"),
+        ] {
+            assert_eq!(
+                sql_fragment(dialect, text).unwrap_err().to_string(),
+                "sql_fragment_invalid",
+                "{text}"
+            );
+        }
     }
     #[test]
     fn statements_are_found_by_where_the_cursor_is() {

@@ -12,6 +12,18 @@ fn source_address() -> &'static str {
         .unwrap_or(updater::SOURCE_URL)
 }
 
+/// Id of the dialog that asks before the waiting changes are saved.
+const SAVE_DIALOG: &str = "save_changes";
+
+/// Whether the widget with this id is in the dialog on top (or above it),
+/// not behind it. Before the dialog has been on screen for a frame, no
+/// widget is.
+fn in_top_dialog(ctx: &egui::Context, id: egui::Id) -> bool {
+    ctx.read_response(id).is_some_and(|response| {
+        ctx.memory(|m| m.top_modal_layer().is_some() && m.is_above_modal_layer(response.layer_id))
+    })
+}
+
 impl StudioApp {
     /// "O programie": the version, the copyright and the licence.
     pub(super) fn about_window(&mut self, ctx: &egui::Context) {
@@ -154,8 +166,36 @@ impl StudioApp {
                 self.copy_key_notice = false;
             }
         }
-        if let Some(confirm) = self.save_confirm.take() {
+        // A widget behind a dialog gives the keyboard up while the dialog is
+        // on top, and still in the frame after it closed. The one that had
+        // it before the save dialog gets it back once that frame is over.
+        let focus_back = egui::Id::new((SAVE_DIALOG, "focus_back"));
+        if self.save_confirm.is_none()
+            && let Some(id) = ctx.data(|d| d.get_temp::<egui::Id>(focus_back))
+        {
+            let save_layer =
+                egui::LayerId::new(egui::Order::Foreground, egui::Id::new(SAVE_DIALOG));
+            match ctx.memory(|m| m.top_modal_layer()) {
+                Some(layer) if layer == save_layer => ctx.request_repaint(),
+                top => {
+                    ctx.data_mut(|d| d.remove::<egui::Id>(focus_back));
+                    // Another dialog that opened meanwhile keeps it.
+                    if top.is_none() {
+                        ctx.memory_mut(|m| m.request_focus(id));
+                    }
+                }
+            }
+        }
+        if let Some(mut confirm) = self.save_confirm.take() {
             let index = self.tabs.iter().position(|tab| tab.id == confirm.tab);
+            // The grid behind the dialog would keep the keyboard, and Tab
+            // would not reach the buttons.
+            if let Some(id) = ctx.memory(|m| m.focused())
+                && !in_top_dialog(ctx, id)
+            {
+                confirm.focus_back.get_or_insert(id);
+                ctx.memory_mut(|m| m.surrender_focus(id));
+            }
             let mut parts = Vec::new();
             if confirm.inserts > 0 {
                 parts.push(if en {
@@ -178,19 +218,28 @@ impl StudioApp {
             let dialog = widgets::dialog(
                 ctx,
                 &p,
-                "save_changes",
+                SAVE_DIALOG,
                 l("Zapisać zmiany?", "Save the changes?"),
                 600.0,
                 l("Zamknij", "Close"),
                 |ui| {
                     widgets::dialog_body(ui, |ui| {
                         widgets::subheading(ui, &p, &parts.join(" · "));
-                        egui::ScrollArea::vertical()
+                        // A paste or a fill can make thousands of statements:
+                        // only the lines in view are laid out, one statement
+                        // a line, and a long one scrolls sideways.
+                        let font = egui::FontId::monospace(p.code() - 1.0);
+                        let line_height = ui.fonts_mut(|f| f.row_height(&font));
+                        egui::ScrollArea::both()
                             .max_height(240.0)
-                            .show(ui, |ui| {
-                                for statement in &confirm.statements {
-                                    ui.label(
-                                        RichText::new(statement).monospace().size(p.code() - 1.0),
+                            .auto_shrink([false, true])
+                            .show_rows(ui, line_height, confirm.statements.len(), |ui, range| {
+                                for statement in &confirm.statements[range] {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(statement).font(font.clone()),
+                                        )
+                                        .extend(),
                                     );
                                 }
                             });
@@ -209,12 +258,33 @@ impl StudioApp {
                     });
                 },
             );
-            // Mod+S, then Enter: the keyboard alone saves.
-            save |= ctx.input(|i| i.key_pressed(egui::Key::Enter));
-            match index {
-                Some(index) if save => self.apply_staged(index),
-                Some(_) if !cancel && !dialog.close => self.save_confirm = Some(confirm),
-                _ => {}
+            // "Anuluj", ✕, Esc and a click beside the dialog come first: Enter
+            // on a focused "Anuluj" clicks it, and must not save as well.
+            let cancelled = cancel || dialog.close;
+            // Mod+S, then Enter: the keyboard alone saves, as long as no
+            // button of the dialog has the keyboard and takes Enter itself.
+            if !cancelled
+                && !save
+                && !ctx
+                    .memory(|m| m.focused())
+                    .is_some_and(|id| in_top_dialog(ctx, id))
+            {
+                save = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            }
+            let open = match index {
+                Some(_) if cancelled => false,
+                Some(index) if save => {
+                    self.apply_staged(index);
+                    false
+                }
+                Some(_) => true,
+                None => false,
+            };
+            if open {
+                self.save_confirm = Some(confirm);
+            } else if let Some(id) = confirm.focus_back {
+                ctx.data_mut(|d| d.insert_temp(focus_back, id));
+                ctx.request_repaint();
             }
         }
         if let Some(id) = self.connection_delete {
